@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import re
 from datetime import datetime
 
@@ -138,7 +137,7 @@ def _check_strict_rejections(
 
     degree_text = " ".join([f"{e.degree} {e.institution} {' '.join(e.details)}" for e in resume.education]).lower()
     for keyword in constraints.required_degree_keywords:
-        if keyword.lower() not in degree_text:
+        if not _degree_constraint_matched(keyword, degree_text):
             reasons.append(f"Missing required degree constraint: {keyword}")
 
     cert_text = " ".join(resume.certifications).lower()
@@ -155,10 +154,11 @@ def _exact_match_score(
     required_skills: list[str],
 ) -> tuple[float, str]:
     resume_skills = {s.lower().strip() for s in resume.skills if s.strip()}
+    resume_skill_text = " | ".join(resume_skills)
 
     if required_skills:
         needed = [s.lower().strip() for s in required_skills if s.strip()]
-        matched = [s for s in needed if s in resume_skills]
+        matched = [s for s in needed if _skill_present(s, resume_skills, resume_skill_text)]
         if not needed:
             return 0.0, "No required skills provided."
         score = 100.0 * len(matched) / len(needed)
@@ -256,3 +256,40 @@ def _build_recruiter_explanation(
         f"{name} scored {total_score:.1f}/100 with inferred experience {inferred_years:.1f} years. "
         f"{exact_note} {semantic_note}"
     )
+
+
+def _skill_present(required_skill: str, resume_skills: set[str], resume_skill_text: str) -> bool:
+    # Direct exact match first.
+    if required_skill in resume_skills:
+        return True
+
+    # Then allow substring and token-boundary style matches for prefixed skill strings.
+    escaped = re.escape(required_skill)
+    pattern = rf"(^|[^a-z0-9]){escaped}([^a-z0-9]|$)"
+    return re.search(pattern, resume_skill_text) is not None
+
+
+def _degree_constraint_matched(keyword: str, degree_text: str) -> bool:
+    key = keyword.lower().strip()
+    if not key:
+        return True
+
+    # Direct match.
+    if key in degree_text:
+        return True
+
+    alias_groups = {
+        "b.tech": ["btech", "b. tech", "bachelor of technology"],
+        "b.e": ["be", "b.e", "bachelor of engineering"],
+        "m.tech": ["mtech", "m. tech", "master of technology"],
+    }
+
+    for anchor, aliases in alias_groups.items():
+        if key == anchor or key in aliases:
+            if anchor in degree_text:
+                return True
+            for alias in aliases:
+                if alias in degree_text:
+                    return True
+
+    return False
