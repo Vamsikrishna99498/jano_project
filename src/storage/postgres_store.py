@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy import JSON, Column, DateTime, Float, Integer, MetaData, String, Table, Text, create_engine
 from sqlalchemy.engine import Engine
 
-from src.schemas import ParseResult
+from src.schemas import ParseResult, ResumeScoreResult, ScoringConstraints, ScoringWeights
 
 
 metadata = MetaData()
@@ -33,6 +33,25 @@ resumes = Table(
     Column("parser_mode", String(64), nullable=False),
     Column("confidence", Float, nullable=False),
     Column("reasons", Text, nullable=False),
+    Column("created_at", DateTime, nullable=False, default=datetime.utcnow),
+)
+
+resume_scores = Table(
+    "resume_scores",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("resume_id", Integer, nullable=False),
+    Column("job_description_id", Integer, nullable=False),
+    Column("file_name", String(255), nullable=False),
+    Column("candidate_name", String(255), nullable=True),
+    Column("total_score", Float, nullable=False),
+    Column("rejected", Integer, nullable=False),
+    Column("rejection_reasons", Text, nullable=False),
+    Column("dimension_scores", JSON, nullable=False),
+    Column("recruiter_explanation", Text, nullable=False),
+    Column("weights_json", JSON, nullable=False),
+    Column("constraints_json", JSON, nullable=False),
+    Column("scoring_version", String(64), nullable=False),
     Column("created_at", DateTime, nullable=False, default=datetime.utcnow),
 )
 
@@ -90,6 +109,42 @@ class PostgresStore:
         query = resumes.select().order_by(resumes.c.id.desc())
         if job_description_id is not None:
             query = query.where(resumes.c.job_description_id == job_description_id)
+        with self.engine.begin() as conn:
+            rows = conn.execute(query)
+            return [dict(row._mapping) for row in rows]
+
+    def add_resume_score(
+        self,
+        score: ResumeScoreResult,
+        job_description_id: int,
+        weights: ScoringWeights,
+        constraints: ScoringConstraints,
+        scoring_version: str,
+    ) -> int:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                resume_scores.insert().values(
+                    resume_id=score.resume_id,
+                    job_description_id=job_description_id,
+                    file_name=score.file_name,
+                    candidate_name=score.candidate_name,
+                    total_score=score.total_score,
+                    rejected=1 if score.rejected else 0,
+                    rejection_reasons=",".join(score.rejection_reasons),
+                    dimension_scores=[d.model_dump() for d in score.dimension_scores],
+                    recruiter_explanation=score.recruiter_explanation,
+                    weights_json=weights.model_dump(),
+                    constraints_json=constraints.model_dump(),
+                    scoring_version=scoring_version,
+                    created_at=datetime.utcnow(),
+                )
+            )
+            return int(result.inserted_primary_key[0])
+
+    def list_resume_scores(self, job_description_id: Optional[int] = None) -> list[dict]:
+        query = resume_scores.select().order_by(resume_scores.c.id.desc())
+        if job_description_id is not None:
+            query = query.where(resume_scores.c.job_description_id == job_description_id)
         with self.engine.begin() as conn:
             rows = conn.execute(query)
             return [dict(row._mapping) for row in rows]

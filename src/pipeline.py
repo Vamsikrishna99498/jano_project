@@ -20,6 +20,7 @@ class ResumeIngestionPipeline:
             embedding_model=settings.embedding_model,
         )
         self.scoring = ResumeScoringEngine(settings.embedding_model)
+        self.scoring_version = "phase2.v2"
         self.pg.init_db()
 
     def create_job_description(self, title: str, description: str) -> int:
@@ -63,6 +64,13 @@ class ResumeIngestionPipeline:
                 constraints=constraints,
             )
             results.append(result)
+            self.pg.add_resume_score(
+                score=result,
+                job_description_id=job_description_id,
+                weights=weights,
+                constraints=constraints,
+                scoring_version=self.scoring_version,
+            )
 
         results.sort(key=lambda x: x.total_score, reverse=True)
         return results
