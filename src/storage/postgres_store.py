@@ -72,7 +72,10 @@ class PostgresStore:
                     created_at=datetime.utcnow(),
                 )
             )
-            return int(result.inserted_primary_key[0])
+            inserted_id = result.inserted_primary_key[0] if result.inserted_primary_key else None
+            if inserted_id is None:
+                raise RuntimeError("Failed to insert job description: missing inserted primary key.")
+            return int(inserted_id)
 
     def list_job_descriptions(self) -> list[dict]:
         with self.engine.begin() as conn:
@@ -103,7 +106,10 @@ class PostgresStore:
                     created_at=datetime.utcnow(),
                 )
             )
-            return int(result.inserted_primary_key[0])
+            inserted_id = result.inserted_primary_key[0] if result.inserted_primary_key else None
+            if inserted_id is None:
+                raise RuntimeError("Failed to insert resume: missing inserted primary key.")
+            return int(inserted_id)
 
     def list_resumes(self, job_description_id: Optional[int] = None) -> list[dict]:
         query = resumes.select().order_by(resumes.c.id.desc())
@@ -139,7 +145,10 @@ class PostgresStore:
                     created_at=datetime.utcnow(),
                 )
             )
-            return int(result.inserted_primary_key[0])
+            inserted_id = result.inserted_primary_key[0] if result.inserted_primary_key else None
+            if inserted_id is None:
+                raise RuntimeError("Failed to insert resume score: missing inserted primary key.")
+            return int(inserted_id)
 
     def list_resume_scores(self, job_description_id: Optional[int] = None) -> list[dict]:
         query = resume_scores.select().order_by(resume_scores.c.id.desc())
