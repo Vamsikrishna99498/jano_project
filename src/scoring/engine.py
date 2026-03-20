@@ -32,7 +32,11 @@ class ResumeScoringEngine:
         normalized_weights = _normalize_weights(weights)
 
         inferred_years = _infer_experience_years(resume, raw_text)
-        rejection_reasons = _check_strict_rejections(resume, inferred_years, constraints)
+        rejection_reasons = _check_strict_rejections(
+            resume,
+            inferred_years,
+            constraints,
+        )
         rejected = len(rejection_reasons) > 0
 
         exact_score, exact_note = _exact_match_score(resume, jd_text, constraints.required_skills)
