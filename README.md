@@ -7,13 +7,14 @@ Phase 2 adds a multi-dimensional scoring engine with recruiter-configurable weig
 
 - PDF and Word resume ingestion (`.pdf`, `.docx`, `.doc`)
 - Separate Job Description input and storage
+- Dedicated Job Description parser (text/PDF/Word/TXT) for auto extraction
 - Code-first parsing with deterministic section extraction
 - LLM fallback for messy layouts (optional)
 - PostgreSQL persistence for parsed outputs
 - FAISS vector indexing for resume chunks/embeddings
 - Streamlit UI for local operation
-- Multi-dimensional scoring engine (Exact Match, Semantic Similarity, Impact, Ownership)
-- Strict rejection rules (minimum years, degree constraints, certification constraints)
+- Multi-dimensional scoring engine (Exact Match, Semantic Similarity, Achievement, Ownership)
+- Strict rejection rules (minimum years and degree constraints)
 - Recruiter-facing short explanation for each scored resume
 
 ## Local Architecture
@@ -32,14 +33,18 @@ Dimensions:
 
 - Exact Match: required skill matching and JD skill-term overlap.
 - Semantic Similarity: local embedding similarity between resume profile text and JD text.
-- Impact: quantified outcomes and impact language signals.
+- Achievement: quantified outcomes and achievement language signals.
 - Ownership: lead/ownership language strength.
 
 Strict rejection rules:
 
 - Minimum years of experience.
 - Required degree keywords.
-- Required certifications.
+
+Constraint source:
+
+- Constraints are auto-extracted from the selected Job Description using the JD parser.
+- Manual skill/year/degree entry is not required in scoring flow.
 
 Scoring target:
 

@@ -41,13 +41,13 @@ class ResumeScoringEngine:
 
         exact_score, exact_note = _exact_match_score(resume, jd_text, constraints.required_skills)
         semantic_score, semantic_note = self._semantic_similarity_score(resume, jd_text)
-        impact_score, impact_note = _impact_score(raw_text)
+        achievement_score, achievement_note = _achievement_score(raw_text)
         ownership_score, ownership_note = _ownership_score(raw_text)
 
         total = (
             normalized_weights.exact_match * exact_score
             + normalized_weights.semantic_similarity * semantic_score
-            + normalized_weights.impact * impact_score
+            + normalized_weights.achievement * achievement_score
             + normalized_weights.ownership * ownership_score
         )
 
@@ -61,7 +61,7 @@ class ResumeScoringEngine:
                 score=round(semantic_score, 2),
                 note=semantic_note,
             ),
-            DimensionScore(name="Impact", score=round(impact_score, 2), note=impact_note),
+            DimensionScore(name="Achievement", score=round(achievement_score, 2), note=achievement_note),
             DimensionScore(name="Ownership", score=round(ownership_score, 2), note=ownership_note),
         ]
 
@@ -101,15 +101,15 @@ def _normalize_weights(weights: ScoringWeights) -> ScoringWeights:
     total = (
         weights.exact_match
         + weights.semantic_similarity
-        + weights.impact
+        + weights.achievement
         + weights.ownership
     )
     if total <= 0:
-        return ScoringWeights(exact_match=0.35, semantic_similarity=0.30, impact=0.20, ownership=0.15)
+        return ScoringWeights(exact_match=0.35, semantic_similarity=0.30, achievement=0.20, ownership=0.15)
     return ScoringWeights(
         exact_match=weights.exact_match / total,
         semantic_similarity=weights.semantic_similarity / total,
-        impact=weights.impact / total,
+        achievement=weights.achievement / total,
         ownership=weights.ownership / total,
     )
 
@@ -144,11 +144,6 @@ def _check_strict_rejections(
         if not _degree_constraint_matched(keyword, degree_text):
             reasons.append(f"Missing required degree constraint: {keyword}")
 
-    cert_text = " ".join(resume.certifications).lower()
-    for cert in constraints.required_certifications:
-        if cert.lower() not in cert_text:
-            reasons.append(f"Missing required certification: {cert}")
-
     return reasons
 
 
@@ -178,16 +173,31 @@ def _exact_match_score(
     return score, f"Skill-term overlap found on {len(overlap)} JD terms."
 
 
-def _impact_score(raw_text: str) -> tuple[float, str]:
+def _achievement_score(raw_text: str) -> tuple[float, str]:
     lowered = raw_text.lower()
-    numbers = re.findall(r"\b\d+(?:\.\d+)?%?\b", lowered)
-    impact_words = ["improved", "increased", "reduced", "saved", "optimized", "grew", "scale"]
-    verbs = [w for w in impact_words if w in lowered]
+    quantified = re.findall(r"\b\d+(?:\.\d+)?\s*(?:%|x|k|m|b)?\b", lowered)
+    achievement_terms = [
+        "improved",
+        "increased",
+        "reduced",
+        "saved",
+        "optimized",
+        "delivered",
+        "launched",
+        "achieved",
+        "boosted",
+        "grew",
+        "scaled",
+    ]
+    terms_found = [w for w in achievement_terms if w in lowered]
 
-    number_signal = min(1.0, len(numbers) / 10.0)
-    verb_signal = min(1.0, len(verbs) / len(impact_words))
-    score = 100.0 * (0.65 * number_signal + 0.35 * verb_signal)
-    return score, f"Detected {len(numbers)} quantified signals and {len(verbs)} impact terms."
+    quantified_signal = min(1.0, len(quantified) / 12.0)
+    term_signal = min(1.0, len(terms_found) / 6.0)
+    score = 100.0 * (0.7 * quantified_signal + 0.3 * term_signal)
+    return score, (
+        f"Detected {len(quantified)} quantified indicators and "
+        f"{len(terms_found)} achievement action terms."
+    )
 
 
 def _ownership_score(raw_text: str) -> tuple[float, str]:
@@ -283,9 +293,26 @@ def _degree_constraint_matched(keyword: str, degree_text: str) -> bool:
         return True
 
     alias_groups = {
+        "bachelor degree": [
+            "bachelor",
+            "bachelor's",
+            "undergraduate",
+            "b.tech",
+            "btech",
+            "bachelor of technology",
+            "b.e",
+            "be",
+            "bachelor of engineering",
+        ],
         "b.tech": ["btech", "b. tech", "bachelor of technology"],
         "b.e": ["be", "b.e", "bachelor of engineering"],
+        "bachelor": ["bachelor", "bachelor's", "undergraduate"],
+        "computer science": ["computer science", "cse", "cs"],
+        "information technology": ["information technology", "it"],
         "m.tech": ["mtech", "m. tech", "master of technology"],
+        "mca": ["mca", "master of computer applications"],
+        "b.sc": ["bsc", "b.sc", "bachelor of science"],
+        "m.sc": ["msc", "m.sc", "master of science"],
     }
 
     for anchor, aliases in alias_groups.items():

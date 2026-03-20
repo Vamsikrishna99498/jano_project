@@ -63,17 +63,23 @@ class ParseResult(BaseModel):
     raw_text: str
 
 
+class JDParsedDetails(BaseModel):
+    title_hint: Optional[str] = None
+    required_skills: List[str] = Field(default_factory=list)
+    min_years_experience: float = 0.0
+    required_degree_keywords: List[str] = Field(default_factory=list)
+
+
 class ScoringWeights(BaseModel):
     exact_match: float = 35.0
     semantic_similarity: float = 30.0
-    impact: float = 20.0
+    achievement: float = 20.0
     ownership: float = 15.0
 
 
 class ScoringConstraints(BaseModel):
     min_years_experience: float = 0.0
     required_degree_keywords: List[str] = Field(default_factory=list)
-    required_certifications: List[str] = Field(default_factory=list)
     required_skills: List[str] = Field(default_factory=list)
 
 

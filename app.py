@@ -4,6 +4,8 @@ import json
 
 import streamlit as st
 
+from src.parser.extractors import extract_text_from_doc, extract_text_from_docx, extract_text_from_pdf
+from src.parser.jd_parser import parse_jd_text
 from src.pipeline import ResumeIngestionPipeline
 from src.schemas import ScoringConstraints, ScoringWeights
 
@@ -44,14 +46,24 @@ def main() -> None:
     with st.form("jd_form"):
         jd_title = st.text_input("Job Title", value="Software Engineer")
         jd_text = st.text_area("Job Description", height=180)
+        jd_file = st.file_uploader(
+            "Optional: Upload Job Description file (PDF/Word/TXT)",
+            type=["pdf", "docx", "doc", "txt"],
+            accept_multiple_files=False,
+            key="jd_file_uploader",
+        )
         jd_submit = st.form_submit_button("Save Job Description")
 
     if jd_submit:
-        if not jd_text.strip():
-            st.warning("Job Description is required.")
+        combined_jd = _build_jd_text(jd_text, jd_file)
+        if not combined_jd.strip():
+            st.warning("Job Description text or file is required.")
         else:
-            jd_id = pipeline.create_job_description(jd_title, jd_text)
+            jd_id = pipeline.create_job_description(jd_title, combined_jd)
             st.success(f"Saved Job Description with ID: {jd_id}")
+            parsed_jd = parse_jd_text(combined_jd)
+            st.caption("Auto-extracted JD constraints preview:")
+            st.json(json.loads(parsed_jd.model_dump_json()))
 
     jd_rows = pipeline.get_job_descriptions()
     jd_options = {f"{row['id']} - {row['title']}": row["id"] for row in jd_rows}
@@ -116,26 +128,8 @@ def main() -> None:
         st.markdown("Recruiter Weight Controls (per role)")
         w_exact = st.slider("Exact Match Weight", min_value=0, max_value=100, value=35)
         w_semantic = st.slider("Semantic Similarity Weight", min_value=0, max_value=100, value=30)
-        w_impact = st.slider("Impact Weight", min_value=0, max_value=100, value=20)
+        w_achievement = st.slider("Achievement Weight", min_value=0, max_value=100, value=20)
         w_ownership = st.slider("Ownership Weight", min_value=0, max_value=100, value=15)
-
-        st.markdown("Strict Rejection Rules")
-        min_years = st.number_input("Minimum years of experience", min_value=0.0, max_value=40.0, value=2.0, step=0.5)
-        degree_keywords = st.text_input(
-            "Required degree keywords (comma-separated)",
-            value="",
-            help="Example: B.Tech, Computer Science",
-        )
-        required_certs = st.text_input(
-            "Required certifications (comma-separated)",
-            value="",
-            help="Example: AWS Certified Developer, CKA",
-        )
-        required_skills = st.text_input(
-            "Required skills for exact match (comma-separated)",
-            value="",
-            help="Example: Python, FastAPI, PostgreSQL",
-        )
 
         score_submit = st.form_submit_button("Run Scoring")
 
@@ -144,14 +138,22 @@ def main() -> None:
         weights = ScoringWeights(
             exact_match=float(w_exact),
             semantic_similarity=float(w_semantic),
-            impact=float(w_impact),
+            achievement=float(w_achievement),
             ownership=float(w_ownership),
         )
+        selected_jd_row = next((row for row in jd_rows if row["id"] == jd_id), None)
+        if selected_jd_row is None:
+            st.error("Selected Job Description was not found.")
+            return
+
+        parsed_jd = parse_jd_text(selected_jd_row["description"])
+        st.caption("Using auto-extracted JD constraints:")
+        st.json(json.loads(parsed_jd.model_dump_json()))
+
         constraints = ScoringConstraints(
-            min_years_experience=float(min_years),
-            required_degree_keywords=_split_csv(degree_keywords),
-            required_certifications=_split_csv(required_certs),
-            required_skills=_split_csv(required_skills),
+            min_years_experience=float(parsed_jd.min_years_experience),
+            required_degree_keywords=parsed_jd.required_degree_keywords,
+            required_skills=parsed_jd.required_skills,
         )
 
         try:
@@ -191,6 +193,35 @@ def main() -> None:
 
 def _split_csv(value: str) -> list[str]:
     return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def _build_jd_text(jd_text: str, jd_file) -> str:
+    text_parts = []
+    if jd_text.strip():
+        text_parts.append(jd_text.strip())
+
+    if jd_file is None:
+        return "\n\n".join(text_parts).strip()
+
+    content = jd_file.read()
+    name = jd_file.name.lower()
+    extracted = ""
+
+    if name.endswith(".pdf"):
+        extracted = extract_text_from_pdf(content)
+    elif name.endswith(".docx"):
+        extracted = extract_text_from_docx(content)
+    elif name.endswith(".doc"):
+        extracted = extract_text_from_doc(content)
+    elif name.endswith(".txt"):
+        extracted = content.decode("utf-8", errors="ignore")
+    else:
+        raise ValueError("Unsupported JD file type. Use PDF/Word/TXT.")
+
+    if extracted.strip():
+        text_parts.append(extracted.strip())
+
+    return "\n\n".join(text_parts).strip()
 
 
 if __name__ == "__main__":
