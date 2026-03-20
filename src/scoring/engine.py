@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from datetime import datetime
@@ -39,10 +40,11 @@ class ResumeScoringEngine:
     ) -> ResumeScoreResult:
         normalized_weights = _normalize_weights(weights)
 
-        inferred_years = _infer_experience_years(resume, raw_text)
+        inferred_years, experience_known = _infer_experience_years(resume, raw_text)
         rejection_reasons = _check_strict_rejections(
             resume,
             inferred_years,
+            experience_known,
             constraints,
         )
         rejected = len(rejection_reasons) > 0
@@ -75,8 +77,8 @@ class ResumeScoringEngine:
 
         explanation = _build_recruiter_explanation(
             candidate_name=resume.candidate_name,
-            total_score=round(total, 2),
             inferred_years=inferred_years,
+            experience_known=experience_known,
             rejected=rejected,
             rejection_reasons=rejection_reasons,
             exact_note=exact_note,
@@ -170,11 +172,13 @@ def _build_resume_semantic_text(resume: ParsedResume) -> str:
 def _check_strict_rejections(
     resume: ParsedResume,
     inferred_years: float,
+    experience_known: bool,
     constraints: ScoringConstraints,
 ) -> list[str]:
     reasons: list[str] = []
 
-    if inferred_years < constraints.min_years_experience:
+    # Only enforce minimum-years rejection when we have explicit experience evidence.
+    if experience_known and inferred_years < constraints.min_years_experience:
         reasons.append(
             f"Experience {inferred_years:.1f}y is below minimum {constraints.min_years_experience:.1f}y."
         )
@@ -306,26 +310,46 @@ def _role_weight(title: str) -> float:
     return 1.0
 
 
-def _infer_experience_years(resume: ParsedResume, raw_text: str) -> float:
+def _infer_experience_years(resume: ParsedResume, raw_text: str) -> tuple[float, bool]:
     years_from_dates = _years_from_experience_dates(resume)
     years_from_text = _years_from_text(raw_text)
-    return max(years_from_dates, years_from_text)
+    inferred = max(years_from_dates, years_from_text)
+    known = inferred > 0.0
+    return inferred, known
 
 
 def _years_from_experience_dates(resume: ParsedResume) -> float:
-    total_months = 0
+    ranges: list[tuple[int, int]] = []
     for exp in resume.experience:
         if not exp.start_date:
             continue
-        start_year = _extract_year(exp.start_date)
-        end_year = _extract_year(exp.end_date or "")
-        if start_year is None:
+        start_idx = _extract_month_index(exp.start_date)
+        end_idx = _extract_month_index(exp.end_date or "")
+        if start_idx is None:
             continue
-        if end_year is None:
-            end_year = datetime.utcnow().year
-        if end_year < start_year:
+        if end_idx is None:
+            today = datetime.utcnow()
+            end_idx = (today.year * 12) + (today.month - 1)
+
+        if end_idx < start_idx:
             continue
-        total_months += (end_year - start_year) * 12
+
+        ranges.append((start_idx, end_idx))
+
+    if not ranges:
+        return 0.0
+
+    # Merge overlapping ranges to avoid double-counting parallel entries.
+    ranges.sort(key=lambda x: x[0])
+    merged: list[tuple[int, int]] = [ranges[0]]
+    for start, end in ranges[1:]:
+        prev_start, prev_end = merged[-1]
+        if start <= prev_end:
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+
+    total_months = sum((end - start) + 1 for start, end in merged)
     return round(total_months / 12.0, 1)
 
 
@@ -344,25 +368,98 @@ def _extract_year(value: str) -> int | None:
     return int(match.group(0))
 
 
+def _extract_month_index(value: str) -> int | None:
+    text = value.strip().lower()
+    if not text:
+        return None
+    if any(token in text for token in ["present", "current", "now", "till date"]):
+        now = datetime.utcnow()
+        return (now.year * 12) + (now.month - 1)
+
+    # YYYY-MM or YYYY/MM
+    m = re.search(r"\b(19|20)\d{2}[-/](0?[1-9]|1[0-2])\b", text)
+    if m:
+        year = int(m.group(0).split("-")[0].split("/")[0])
+        month = int(m.group(2))
+        return (year * 12) + (month - 1)
+
+    # MM/YYYY or MM-YYYY
+    m = re.search(r"\b(0?[1-9]|1[0-2])[-/](19|20)\d{2}\b", text)
+    if m:
+        month = int(m.group(1))
+        year = int(m.group(0).split("-")[-1].split("/")[-1])
+        return (year * 12) + (month - 1)
+
+    # Month name + year (e.g., Jan 2020)
+    month_map = {
+        "jan": 1,
+        "feb": 2,
+        "mar": 3,
+        "apr": 4,
+        "may": 5,
+        "jun": 6,
+        "jul": 7,
+        "aug": 8,
+        "sep": 9,
+        "oct": 10,
+        "nov": 11,
+        "dec": 12,
+    }
+    m = re.search(r"\b([a-z]{3,9})\s+(19|20)\d{2}\b", text)
+    if m:
+        mon_txt = m.group(1)[:3]
+        year_match = re.search(r"(19|20)\d{2}", m.group(0))
+        if not year_match:
+            return None
+        year = int(year_match.group(0))
+        month = month_map.get(mon_txt)
+        if month is not None:
+            return (year * 12) + (month - 1)
+
+    # Year only
+    year = _extract_year(text)
+    if year is not None:
+        return year * 12
+
+    return None
+
+
 def _build_recruiter_explanation(
     candidate_name: str | None,
-    total_score: float,
     inferred_years: float,
+    experience_known: bool,
     rejected: bool,
     rejection_reasons: list[str],
     exact_note: str,
     semantic_note: str,
 ) -> str:
     name = candidate_name or "Candidate"
+    decision = "REJECT" if rejected else "REVIEW"
+
+    if experience_known:
+        experience_note = f"Experience signal: approximately {inferred_years:.1f} years inferred."
+    else:
+        experience_note = "Experience signal: duration not explicitly stated; evaluate role depth from projects and responsibilities."
+
+    payload: dict[str, object] = {
+        "candidate": name,
+        "decision": decision,
+        "skills_match": exact_note,
+        "semantic_fit": semantic_note,
+        "experience_signal": experience_note,
+        "risk_flags": [],
+        "recommendation": "",
+    }
+
     if rejected:
-        return (
-            f"{name} scored {total_score:.1f}/100 but was auto-rejected due to strict criteria: "
-            + "; ".join(rejection_reasons)
-        )
-    return (
-        f"{name} scored {total_score:.1f}/100 with inferred experience {inferred_years:.1f} years. "
-        f"{exact_note} {semantic_note}"
-    )
+        reason_text = "; ".join(rejection_reasons) if rejection_reasons else "Strict criteria not met."
+        payload["risk_flags"] = [reason_text]
+        payload["recommendation"] = "Reject unless criteria are manually relaxed."
+    else:
+        payload["risk_flags"] = ["No strict-rule blockers identified."]
+        payload["recommendation"] = "Shortlist for recruiter review and interview screening."
+
+    return json.dumps(payload, ensure_ascii=True)
 
 
 def _skill_present(required_skill: str, resume_skills: set[str], resume_skill_text: str) -> bool:

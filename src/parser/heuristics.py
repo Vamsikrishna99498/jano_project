@@ -14,12 +14,25 @@ from src.schemas import (
 
 
 SECTION_HEADERS = {
-    "summary": ["summary", "profile", "objective"],
-    "skills": ["skills", "technical skills", "core competencies"],
-    "experience": ["experience", "work experience", "professional experience"],
-    "education": ["education", "academic"],
-    "projects": ["projects", "project experience"],
-    "certifications": ["certifications", "licenses"],
+    "summary": ["summary", "profile", "objective", "professional summary", "about"],
+    "skills": [
+        "skills",
+        "technical skills",
+        "core competencies",
+        "technical stack",
+        "tech stack",
+        "skills and tools",
+    ],
+    "experience": [
+        "experience",
+        "work experience",
+        "professional experience",
+        "employment",
+        "work history",
+    ],
+    "education": ["education", "academic", "academic background"],
+    "projects": ["projects", "project experience", "personal projects"],
+    "certifications": ["certifications", "licenses", "courses"],
 }
 
 
@@ -31,14 +44,11 @@ def split_sections(text: str) -> Dict[str, str]:
     for line in lines:
         if not line:
             continue
-        lower = line.lower().strip(":")
-        matched = None
-        for key, aliases in SECTION_HEADERS.items():
-            if lower in aliases:
-                matched = key
-                break
+        matched, inline_content = _match_section_header(line)
         if matched:
             current = matched
+            if inline_content:
+                sections[current].append(inline_content)
             continue
         sections[current].append(line)
 
@@ -63,14 +73,30 @@ def extract_contact(text: str) -> ContactInfo:
 
 
 def parse_skills(section: str) -> List[str]:
-    if not section:
+    if not section.strip():
         return []
-    tokens = re.split(r"[,|•\n]", section)
-    skills = [t.strip() for t in tokens if t.strip()]
+
+    cleaned = re.sub(r"(?i)^skills\s*[:\-]\s*", "", section.strip())
+    cleaned = cleaned.replace("\u2022", "|")
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+
+    tokens = re.split(r"[,|;\n]", cleaned)
+    skills = []
+    for token in tokens:
+        parts = [token]
+        # Split slash-separated compounds only when they look like list separators.
+        if "/" in token and not re.search(r"c\+\+|ci/cd|a/b", token, flags=re.IGNORECASE):
+            parts = token.split("/")
+
+        for part in parts:
+            value = part.strip(" -:\t")
+            if value:
+                skills.append(value)
+
     unique = []
     seen = set()
     for skill in skills:
-        key = skill.lower()
+        key = _normalize_skill_key(skill)
         if key not in seen:
             seen.add(key)
             unique.append(skill)
@@ -135,6 +161,8 @@ def parse_resume_code_first(text: str) -> Tuple[ParsedResume, ParseDiagnostics]:
     contact = extract_contact(text)
     summary = sections.get("summary")
     skills = parse_skills(sections.get("skills", ""))
+    if not skills:
+        skills = _infer_skills_from_text(text)
     experience = parse_experience(sections.get("experience", ""))
     education = parse_education(sections.get("education", ""))
     projects = parse_projects(sections.get("projects", ""))
@@ -176,6 +204,11 @@ def parser_confidence(resume: ParsedResume, raw_text: str) -> Tuple[float, List[
     else:
         reasons.append("missing_email")
 
+    if resume.contact.phone or resume.contact.linkedin or resume.contact.github:
+        score += 0.1
+    else:
+        reasons.append("limited_contact_signals")
+
     if resume.experience:
         score += 0.2
     else:
@@ -191,6 +224,11 @@ def parser_confidence(resume: ParsedResume, raw_text: str) -> Tuple[float, List[
     else:
         reasons.append("missing_education_projects")
 
+    if resume.summary and len(resume.summary) >= 40:
+        score += 0.1
+    else:
+        reasons.append("weak_summary")
+
     return min(score, 1.0), reasons
 
 
@@ -203,3 +241,85 @@ def _split_title_company(header: str) -> Tuple[str, str]:
         if len(parts) == 2:
             return parts[0].strip(), parts[1].strip()
     return header.strip(), ""
+
+
+def _normalize_header(value: str) -> str:
+    lowered = value.lower().strip()
+    lowered = re.sub(r"[\-:|]+$", "", lowered)
+    lowered = re.sub(r"\s+", " ", lowered)
+    lowered = re.sub(r"[^a-z\s]", "", lowered)
+    return lowered.strip()
+
+
+def _match_section_header(line: str) -> Tuple[str | None, str]:
+    stripped = line.strip()
+    normalized = _normalize_header(stripped)
+
+    for key, aliases in SECTION_HEADERS.items():
+        if normalized in aliases:
+            return key, ""
+
+    # Inline header style: "Skills: Python, SQL".
+    inline_match = re.match(r"^\s*([A-Za-z\s/&]+?)\s*[:\-]\s*(.+)$", stripped)
+    if inline_match:
+        header = _normalize_header(inline_match.group(1))
+        content = inline_match.group(2).strip()
+        for key, aliases in SECTION_HEADERS.items():
+            if header in aliases:
+                return key, content
+
+    return None, ""
+
+
+def _normalize_skill_key(skill: str) -> str:
+    return re.sub(r"\s+", " ", skill.lower().strip())
+
+
+def _infer_skills_from_text(text: str) -> List[str]:
+    # Lightweight inference for resumes missing a dedicated "Skills" section.
+    known = [
+        "python",
+        "java",
+        "javascript",
+        "typescript",
+        "sql",
+        "postgresql",
+        "mysql",
+        "mongodb",
+        "aws",
+        "azure",
+        "gcp",
+        "docker",
+        "kubernetes",
+        "react",
+        "angular",
+        "node",
+        "fastapi",
+        "flask",
+        "django",
+        "kafka",
+        "rabbitmq",
+        "kinesis",
+        "pytorch",
+        "tensorflow",
+        "nlp",
+        "machine learning",
+    ]
+    lowered = text.lower()
+    found: list[str] = []
+    for item in known:
+        if re.search(rf"(^|[^a-z0-9]){re.escape(item)}([^a-z0-9]|$)", lowered):
+            found.append(item)
+
+    # Present skill names with familiar casing.
+    casing = {
+        "javascript": "JavaScript",
+        "typescript": "TypeScript",
+        "postgresql": "PostgreSQL",
+        "aws": "AWS",
+        "gcp": "GCP",
+        "nlp": "NLP",
+        "fastapi": "FastAPI",
+        "machine learning": "Machine Learning",
+    }
+    return [casing.get(item, item.title()) for item in found]

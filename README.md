@@ -210,12 +210,127 @@ Practical reading:
 - The first run is usually slower due to model warm-up.
 - Warm runs better represent steady-state throughput.
 
+## Small Synthetic Testset (Option A)
+
+Inspired by JD-plus-ground-truth style evaluation from resume screening RAG projects,
+this repo includes a small synthetic scoring testset for quick local validation.
+
+Included assets:
+
+- Testset: `data/testsets/scoring_small_testset.json`
+- Evaluator script: `scripts/run_small_scoring_eval.py`
+
+Run evaluation:
+
+```bash
+python scripts/run_small_scoring_eval.py
+```
+
+Run with stricter checks and parser-layer e2e validation:
+
+```bash
+python scripts/run_small_scoring_eval.py --e2e-parse
+```
+
+Custom paths:
+
+```bash
+python scripts/run_small_scoring_eval.py \
+	--testset data/testsets/scoring_small_testset.json \
+	--output data/testsets/results/scoring_small_eval_report.json
+```
+
+What is validated:
+
+- Top-1 expected candidate per JD test case
+- Top-K expected candidate set inclusion
+- Strict rejection behavior for configured constraints
+- Strict Top-K order check (when expected order is provided)
+- False-positive rejection check via `must_not_reject_ids`
+- Optional parser-layer e2e top-1 check (`--e2e-parse`)
+
+## Stability Check (Randomized, Small Scale)
+
+You can also run repeated randomized checks to see if ranking decisions stay stable
+when scoring weights are slightly perturbed.
+
+Script:
+
+- `scripts/run_small_scoring_stability.py`
+
+Example run:
+
+```bash
+python scripts/run_small_scoring_stability.py --iterations 20 --weight-jitter 0.15
+```
+
+Stricter mode (weight jitter + candidate text perturbation):
+
+```bash
+python scripts/run_small_scoring_stability.py \
+	--iterations 20 \
+	--weight-jitter 0.15 \
+	--perturb-text \
+	--text-jitter 0.20
+```
+
+Output report:
+
+- `data/testsets/results/scoring_small_stability_report.json`
+
+Key outputs:
+
+- top1_stability per case
+- topk_stability per case
+- reject_stability per case
+- average stability metrics across all cases
+
+## Parser QA (Mildly Unstructured Samples)
+
+To prevent regressions in parser behavior for slightly messy resume text,
+run parser QA fixtures:
+
+- Input fixtures: `data/testsets/parser_qa_samples.json`
+- Runner: `scripts/run_parser_qa.py`
+
+Command:
+
+```bash
+python scripts/run_parser_qa.py
+```
+
+Report output:
+
+- `data/testsets/results/parser_qa_report.json`
+
+Checks include:
+
+- required skill extraction
+- minimum experience entries
+- contact email capture
+- summary capture
+
 ## LLM Fallback Modes
 
 - `none`: no fallback.
-- `ollama`: free local model hosting (best for privacy, no API cost).
+- `openai`: hosted OpenAI models (set `OPENAI_API_KEY`).
+- `anthropic`: hosted Anthropic models (set `ANTHROPIC_API_KEY`).
 
 Set using env vars in `.env`.
+
+Example:
+
+```bash
+# OpenAI
+LLM_MODE=openai
+LLM_MODEL=gpt-4o-mini
+OPENAI_API_KEY=your_key_here
+
+# Anthropic
+LLM_MODE=anthropic
+LLM_MODEL=claude-3-5-haiku-latest
+ANTHROPIC_API_KEY=your_key_here
+```
 
 ## Notes
 

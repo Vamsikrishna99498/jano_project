@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
+from openai import OpenAI
 import requests
 
 from src.config import settings
@@ -30,9 +32,11 @@ Resume text:
 def run_llm_fallback(raw_text: str) -> tuple[ParsedResume, ParseDiagnostics]:
     mode = settings.llm_mode
     if mode == "none":
-        raise RuntimeError("LLM fallback is disabled. Set LLM_MODE to ollama.")
-    if mode == "ollama":
-        data = _call_ollama(raw_text)
+        raise RuntimeError("LLM fallback is disabled. Set LLM_MODE to openai or anthropic.")
+    if mode == "openai":
+        data = _call_openai(raw_text)
+    elif mode == "anthropic":
+        data = _call_anthropic(raw_text)
     else:
         raise ValueError(f"Unsupported LLM_MODE: {mode}")
 
@@ -46,19 +50,69 @@ def run_llm_fallback(raw_text: str) -> tuple[ParsedResume, ParseDiagnostics]:
     return resume, diagnostics
 
 
-def _call_ollama(raw_text: str) -> dict[str, Any]:
+def _call_openai(raw_text: str) -> dict[str, Any]:
+    api_key = settings.openai_api_key.strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is required when LLM_MODE=openai.")
+
+    client = OpenAI(
+        api_key=api_key,
+        timeout=90.0,
+    )
+    response = client.chat.completions.create(
+        model=settings.llm_model,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a strict resume parser. Return valid JSON only.",
+            },
+            {
+                "role": "user",
+                "content": PROMPT_TEMPLATE.format(resume_text=raw_text[:12000]),
+            },
+        ],
+        temperature=0,
+    )
+    content = response.choices[0].message.content or "{}"
+    return _to_json(content)
+
+
+def _call_anthropic(raw_text: str) -> dict[str, Any]:
+    if not settings.anthropic_api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is required when LLM_MODE=anthropic.")
+
     payload = {
         "model": settings.llm_model,
-        "prompt": PROMPT_TEMPLATE.format(resume_text=raw_text[:12000]),
-        "stream": False,
-        "format": "json",
+        "max_tokens": 2048,
+        "temperature": 0,
+        "system": "You are a strict resume parser. Return valid JSON only.",
+        "messages": [
+            {
+                "role": "user",
+                "content": PROMPT_TEMPLATE.format(resume_text=raw_text[:12000]),
+            }
+        ],
     }
     response = requests.post(
-        f"{settings.ollama_base_url}/api/generate", json=payload, timeout=90
+        f"{settings.anthropic_base_url.rstrip('/')}/v1/messages",
+        headers={
+            "x-api-key": settings.anthropic_api_key,
+            "anthropic-version": settings.anthropic_api_version,
+            "content-type": "application/json",
+        },
+        json=payload,
+        timeout=90,
     )
     response.raise_for_status()
     body = response.json()
-    return _to_json(body.get("response", "{}"))
+    content_blocks = body.get("content", [])
+    text_out = ""
+    if isinstance(content_blocks, list):
+        for block in content_blocks:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text_out += str(block.get("text", ""))
+    return _to_json(text_out or "{}")
 
 
 def _to_json(text: str) -> dict[str, Any]:
@@ -138,7 +192,12 @@ def _as_str_list(value: Any) -> list[str]:
         return []
     if isinstance(value, str):
         stripped = value.strip()
-        return [stripped] if stripped else []
+        if not stripped:
+            return []
+        if any(sep in stripped for sep in [",", ";", "|", "\n"]):
+            parts = re.split(r"[,;|\n]", stripped)
+            return [part.strip() for part in parts if part.strip()]
+        return [stripped]
     if isinstance(value, list):
         out: list[str] = []
         for item in value:

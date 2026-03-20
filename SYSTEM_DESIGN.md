@@ -129,7 +129,7 @@ This enables reproducibility and explainability because each final score can be 
 ### 6.2 LLM Strategy
 
 - Default mode: local-first (no paid dependency required)
-- Provider-flexible design: local Ollama now, easy adapter path for OpenAI/Anthropic later
+- Provider-flexible design: OpenAI and Anthropic supported via environment-configured fallback mode
 - LLM usage currently focused on parser fallback, not mandatory for core path
 
 ### 6.3 Semantic Similarity Methodology

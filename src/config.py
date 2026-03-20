@@ -22,8 +22,15 @@ class Settings:
     )
 
     llm_mode: str = os.getenv("LLM_MODE", "none").lower()
-    llm_model: str = os.getenv("LLM_MODEL", "llama3.1:8b")
-    ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    llm_model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    force_llm_only: bool = os.getenv("FORCE_LLM_ONLY", "false").lower() == "true"
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    openai_project: str = os.getenv("OPENAI_PROJECT", "")
+    openai_organization: str = os.getenv("OPENAI_ORGANIZATION", "")
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    anthropic_base_url: str = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+    anthropic_api_version: str = os.getenv("ANTHROPIC_API_VERSION", "2023-06-01")
 
 
 settings = Settings()
