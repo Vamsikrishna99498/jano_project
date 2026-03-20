@@ -55,6 +55,19 @@ resume_scores = Table(
     Column("created_at", DateTime, nullable=False, default=datetime.utcnow),
 )
 
+vector_sync_jobs = Table(
+    "vector_sync_jobs",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("resume_id", Integer, nullable=False),
+    Column("raw_text", Text, nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("attempt_count", Integer, nullable=False, default=0),
+    Column("last_error", Text, nullable=True),
+    Column("created_at", DateTime, nullable=False, default=datetime.utcnow),
+    Column("updated_at", DateTime, nullable=False, default=datetime.utcnow),
+)
+
 
 class PostgresStore:
     def __init__(self, database_url: str) -> None:
@@ -111,6 +124,46 @@ class PostgresStore:
                 raise RuntimeError("Failed to insert resume: missing inserted primary key.")
             return int(inserted_id)
 
+    def add_resume_with_vector_job(
+        self,
+        parse_result: ParseResult,
+        job_description_id: Optional[int],
+    ) -> tuple[int, int]:
+        with self.engine.begin() as conn:
+            resume_result = conn.execute(
+                resumes.insert().values(
+                    file_name=parse_result.file_name,
+                    file_type=parse_result.file_type,
+                    job_description_id=job_description_id,
+                    raw_text=parse_result.raw_text,
+                    parsed_json=json.loads(parse_result.resume.model_dump_json()),
+                    parser_mode=parse_result.diagnostics.parser_mode,
+                    confidence=parse_result.diagnostics.confidence,
+                    reasons=",".join(parse_result.diagnostics.reasons),
+                    created_at=datetime.utcnow(),
+                )
+            )
+            resume_id = resume_result.inserted_primary_key[0] if resume_result.inserted_primary_key else None
+            if resume_id is None:
+                raise RuntimeError("Failed to insert resume: missing inserted primary key.")
+
+            job_result = conn.execute(
+                vector_sync_jobs.insert().values(
+                    resume_id=int(resume_id),
+                    raw_text=parse_result.raw_text,
+                    status="pending",
+                    attempt_count=0,
+                    last_error=None,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+            )
+            job_id = job_result.inserted_primary_key[0] if job_result.inserted_primary_key else None
+            if job_id is None:
+                raise RuntimeError("Failed to insert vector sync job: missing inserted primary key.")
+
+            return int(resume_id), int(job_id)
+
     def list_resumes(self, job_description_id: Optional[int] = None) -> list[dict]:
         query = resumes.select().order_by(resumes.c.id.desc())
         if job_description_id is not None:
@@ -118,6 +171,62 @@ class PostgresStore:
         with self.engine.begin() as conn:
             rows = conn.execute(query)
             return [dict(row._mapping) for row in rows]
+
+    def list_vector_sync_jobs(self, status: str = "pending", limit: int = 50) -> list[dict]:
+        query = (
+            vector_sync_jobs.select()
+            .where(vector_sync_jobs.c.status == status)
+            .order_by(vector_sync_jobs.c.id.asc())
+            .limit(max(1, int(limit)))
+        )
+        with self.engine.begin() as conn:
+            rows = conn.execute(query)
+            return [dict(row._mapping) for row in rows]
+
+    def mark_vector_sync_job_success(self, job_id: int) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                vector_sync_jobs.update()
+                .where(vector_sync_jobs.c.id == job_id)
+                .values(
+                    status="done",
+                    last_error=None,
+                    updated_at=datetime.utcnow(),
+                )
+            )
+
+    def mark_vector_sync_job_failure(self, job_id: int, error: str) -> None:
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                vector_sync_jobs.select().where(vector_sync_jobs.c.id == job_id)
+            ).fetchone()
+            attempts = 0
+            if row is not None:
+                attempts = int(row._mapping.get("attempt_count") or 0)
+
+            conn.execute(
+                vector_sync_jobs.update()
+                .where(vector_sync_jobs.c.id == job_id)
+                .values(
+                    status="pending",
+                    attempt_count=attempts + 1,
+                    last_error=error[:1000],
+                    updated_at=datetime.utcnow(),
+                )
+            )
+
+    def get_vector_sync_summary(self) -> dict[str, int]:
+        with self.engine.begin() as conn:
+            pending = conn.execute(
+                vector_sync_jobs.select().where(vector_sync_jobs.c.status == "pending")
+            ).fetchall()
+            done = conn.execute(
+                vector_sync_jobs.select().where(vector_sync_jobs.c.status == "done")
+            ).fetchall()
+            return {
+                "pending": len(pending),
+                "done": len(done),
+            }
 
     def add_resume_score(
         self,

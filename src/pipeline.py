@@ -44,12 +44,17 @@ class ResumeIngestionPipeline:
         parse_ms = (perf_counter() - parse_started) * 1000.0
 
         db_started = perf_counter()
-        resume_id = self.pg.add_resume(parse_result=parse_result, job_description_id=job_description_id)
+        resume_id, job_id = self.pg.add_resume_with_vector_job(
+            parse_result=parse_result,
+            job_description_id=job_description_id,
+        )
         db_insert_ms = (perf_counter() - db_started) * 1000.0
 
         vector_started = perf_counter()
-        self.faiss.add_resume_text(resume_id=resume_id, text=parse_result.raw_text)
+        vector_synced = self._attempt_vector_sync(job_id=job_id, resume_id=resume_id, text=parse_result.raw_text)
         vector_upsert_ms = (perf_counter() - vector_started) * 1000.0
+        if not vector_synced:
+            parse_result.diagnostics.reasons.append("vector_sync_pending_retry")
 
         parse_result.diagnostics.timing_ms = {
             "parse": round(parse_ms, 2),
@@ -58,6 +63,36 @@ class ResumeIngestionPipeline:
             "total": round((perf_counter() - started) * 1000.0, 2),
         }
         return resume_id, parse_result
+
+    def retry_pending_vector_sync_jobs(self, limit: int = 25) -> tuple[int, int]:
+        rows = self.pg.list_vector_sync_jobs(status="pending", limit=limit)
+        success = 0
+        failed = 0
+
+        for row in rows:
+            ok = self._attempt_vector_sync(
+                job_id=int(row["id"]),
+                resume_id=int(row["resume_id"]),
+                text=str(row["raw_text"]),
+            )
+            if ok:
+                success += 1
+            else:
+                failed += 1
+
+        return success, failed
+
+    def get_vector_sync_summary(self) -> dict[str, int]:
+        return self.pg.get_vector_sync_summary()
+
+    def _attempt_vector_sync(self, job_id: int, resume_id: int, text: str) -> bool:
+        try:
+            self.faiss.add_resume_text(resume_id=resume_id, text=text)
+            self.pg.mark_vector_sync_job_success(job_id)
+            return True
+        except Exception as exc:
+            self.pg.mark_vector_sync_job_failure(job_id, str(exc))
+            return False
 
     def score_resumes_for_job(
         self,
