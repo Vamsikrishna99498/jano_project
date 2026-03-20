@@ -5,6 +5,7 @@ import json
 import streamlit as st
 
 from src.pipeline import ResumeIngestionPipeline
+from src.schemas import ScoringConstraints, ScoringWeights
 
 
 IDEAL_FILE_SIZE_BYTES = 1 * 1024 * 1024
@@ -17,11 +18,27 @@ def get_pipeline() -> ResumeIngestionPipeline:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Resume Parser - Phase 1", page_icon="📄", layout="wide")
-    st.title("Phase 1: Smart Resume Parser")
-    st.caption("Local-first parsing with PostgreSQL + FAISS")
+    st.set_page_config(page_title="Resume AI Assistant", page_icon="📄", layout="wide")
+    st.title("Resume AI Assistant")
+    st.caption("Phase 1 + Phase 2: parsing and multi-dimensional scoring")
 
-    pipeline = get_pipeline()
+    try:
+        pipeline = get_pipeline()
+    except Exception as exc:
+        st.error("Database connection failed. Please update DATABASE_URL in .env and restart Streamlit.")
+        st.code(
+            "\n".join(
+                [
+                    "Example PostgreSQL URL:",
+                    "DATABASE_URL=postgresql+psycopg2://postgres:<YOUR_PASSWORD>@localhost:5432/resume_ai",
+                    "",
+                    "If database does not exist yet:",
+                    "createdb resume_ai",
+                ]
+            )
+        )
+        st.caption(f"Startup error: {str(exc)}")
+        return
 
     st.subheader("1) Add Job Description")
     with st.form("jd_form"):
@@ -83,6 +100,97 @@ def main() -> None:
                 )
             except Exception as exc:
                 st.error(f"{file.name}: {str(exc)}")
+
+    st.subheader("3) Score Resumes (Phase 2)")
+    if not jd_rows:
+        st.info("Create at least one Job Description to run scoring.")
+        return
+
+    with st.form("scoring_form"):
+        score_target = st.selectbox(
+            "Select Job Description for scoring",
+            options=list(jd_options.keys()),
+            index=0,
+        )
+
+        st.markdown("Recruiter Weight Controls (per role)")
+        w_exact = st.slider("Exact Match Weight", min_value=0, max_value=100, value=35)
+        w_semantic = st.slider("Semantic Similarity Weight", min_value=0, max_value=100, value=30)
+        w_impact = st.slider("Impact Weight", min_value=0, max_value=100, value=20)
+        w_ownership = st.slider("Ownership Weight", min_value=0, max_value=100, value=15)
+
+        st.markdown("Strict Rejection Rules")
+        min_years = st.number_input("Minimum years of experience", min_value=0.0, max_value=40.0, value=2.0, step=0.5)
+        degree_keywords = st.text_input(
+            "Required degree keywords (comma-separated)",
+            value="",
+            help="Example: B.Tech, Computer Science",
+        )
+        required_certs = st.text_input(
+            "Required certifications (comma-separated)",
+            value="",
+            help="Example: AWS Certified Developer, CKA",
+        )
+        required_skills = st.text_input(
+            "Required skills for exact match (comma-separated)",
+            value="",
+            help="Example: Python, FastAPI, PostgreSQL",
+        )
+
+        score_submit = st.form_submit_button("Run Scoring")
+
+    if score_submit:
+        jd_id = jd_options[score_target]
+        weights = ScoringWeights(
+            exact_match=float(w_exact),
+            semantic_similarity=float(w_semantic),
+            impact=float(w_impact),
+            ownership=float(w_ownership),
+        )
+        constraints = ScoringConstraints(
+            min_years_experience=float(min_years),
+            required_degree_keywords=_split_csv(degree_keywords),
+            required_certifications=_split_csv(required_certs),
+            required_skills=_split_csv(required_skills),
+        )
+
+        try:
+            score_rows = pipeline.score_resumes_for_job(
+                job_description_id=jd_id,
+                weights=weights,
+                constraints=constraints,
+            )
+        except Exception as exc:
+            st.error(str(exc))
+            return
+
+        if not score_rows:
+            st.warning("No resumes attached to this Job Description yet.")
+            return
+
+        st.success(f"Scored {len(score_rows)} resumes.")
+        for rank, row in enumerate(score_rows, start=1):
+            title = f"#{rank} | {row.file_name} | Score: {row.total_score:.1f}"
+            if row.rejected:
+                title += " | REJECTED"
+            with st.expander(title, expanded=(rank <= 3)):
+                st.write(row.recruiter_explanation)
+                if row.rejected and row.rejection_reasons:
+                    st.caption("Rejection reasons: " + "; ".join(row.rejection_reasons))
+                st.table(
+                    [
+                        {
+                            "Dimension": d.name,
+                            "Score": f"{d.score:.1f}",
+                            "Note": d.note,
+                        }
+                        for d in row.dimension_scores
+                    ]
+                )
+
+
+def _split_csv(value: str) -> list[str]:
+    return [v.strip() for v in value.split(",") if v.strip()]
 
 
 if __name__ == "__main__":
