@@ -42,7 +42,7 @@ class ResumeScoringEngine:
         exact_score, exact_note = _exact_match_score(resume, jd_text, constraints.required_skills)
         semantic_score, semantic_note = self._semantic_similarity_score(resume, jd_text)
         achievement_score, achievement_note = _achievement_score(raw_text)
-        ownership_score, ownership_note = _ownership_score(raw_text)
+        ownership_score, ownership_note = _ownership_score(resume)
 
         total = (
             normalized_weights.exact_match * exact_score
@@ -200,17 +200,70 @@ def _achievement_score(raw_text: str) -> tuple[float, str]:
     )
 
 
-def _ownership_score(raw_text: str) -> tuple[float, str]:
-    lowered = raw_text.lower()
-    strong = ["led", "owned", "architected", "designed", "mentored", "drove", "end-to-end"]
-    weak = ["assisted", "helped", "supported"]
+def _ownership_score(resume: ParsedResume) -> tuple[float, str]:
+    if not resume.experience:
+        return 0.0, "Ownership scoring requires experience entries."
 
-    strong_hits = sum(1 for t in strong if t in lowered)
-    weak_hits = sum(1 for t in weak if t in lowered)
-    net = max(0, strong_hits - weak_hits)
+    strong_verbs = [
+        "architected",
+        "designed",
+        "led",
+        "owned",
+        "drove",
+        "implemented",
+        "mentored",
+        "built",
+    ]
+    support_verbs = ["assisted", "helped", "supported"]
 
-    score = min(100.0, (net / 6.0) * 100.0)
-    return score, f"Ownership signals: strong={strong_hits}, support={weak_hits}."
+    role_scores: list[float] = []
+    total_strong = 0
+    total_support = 0
+
+    for exp in resume.experience:
+        title = (exp.title or "").lower()
+        description_text = " ".join(exp.description).lower()
+
+        strong_hits = sum(1 for verb in strong_verbs if verb in description_text)
+        support_hits = sum(1 for verb in support_verbs if verb in description_text)
+        total_strong += strong_hits
+        total_support += support_hits
+
+        # Penalize support-only phrasing within the same role context.
+        net_signal = max(0.0, float(strong_hits) - (0.8 * float(support_hits)))
+        base_score = min(100.0, (net_signal / 3.0) * 100.0)
+        weighted_role_score = min(100.0, base_score * _role_weight(title))
+        role_scores.append(weighted_role_score)
+
+    count = len(role_scores)
+    recent_count = max(1, (count + 1) // 2)
+
+    # Assumes experience list is ordered from most recent to oldest.
+    recent_scores = role_scores[:recent_count]
+    older_scores = role_scores[recent_count:]
+
+    recent_avg = sum(recent_scores) / len(recent_scores)
+    if older_scores:
+        older_avg = sum(older_scores) / len(older_scores)
+        final_score = (0.6 * recent_avg) + (0.4 * older_avg)
+    else:
+        final_score = recent_avg
+
+    note = (
+        f"Ownership signals by role context: strong={total_strong}, support={total_support}; "
+        f"recent-role weighting=60%."
+    )
+    return final_score, note
+
+
+def _role_weight(title: str) -> float:
+    if any(token in title for token in ["lead", "manager", "head", "principal", "staff"]):
+        return 1.2
+    if any(token in title for token in ["senior", "sr"]):
+        return 1.1
+    if any(token in title for token in ["intern", "trainee"]):
+        return 0.85
+    return 1.0
 
 
 def _infer_experience_years(resume: ParsedResume, raw_text: str) -> float:
