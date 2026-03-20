@@ -42,6 +42,23 @@ def main() -> None:
         st.caption(f"Startup error: {str(exc)}")
         return
 
+    retried_ok = 0
+    retried_failed = 0
+    if not st.session_state.get("vector_sync_startup_retry_done", False):
+        retried_ok, retried_failed = pipeline.retry_pending_vector_sync_jobs(limit=10)
+        st.session_state["vector_sync_startup_retry_done"] = True
+
+    sync_summary = pipeline.get_vector_sync_summary()
+    if retried_ok > 0:
+        st.caption(f"Recovered {retried_ok} pending vector sync job(s) on startup.")
+    if sync_summary.get("pending", 0) > 0:
+        st.info(
+            f"Vector sync queue pending: {sync_summary['pending']} job(s). "
+            "Uploads are saved safely and will retry automatically."
+        )
+    elif retried_failed > 0:
+        st.warning("Some vector sync retries failed and remain queued.")
+
     st.subheader("1) Add Job Description")
     with st.form("jd_form"):
         jd_title = st.text_input("Job Title", value="Software Engineer")
