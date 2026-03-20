@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import datetime
 
 import numpy as np
@@ -34,6 +35,7 @@ class ResumeScoringEngine:
         jd_text: str,
         weights: ScoringWeights,
         constraints: ScoringConstraints,
+        semantic_override: tuple[float, str] | None = None,
     ) -> ResumeScoreResult:
         normalized_weights = _normalize_weights(weights)
 
@@ -46,7 +48,7 @@ class ResumeScoringEngine:
         rejected = len(rejection_reasons) > 0
 
         exact_score, exact_note = _exact_match_score(resume, jd_text, constraints.required_skills)
-        semantic_score, semantic_note = self._semantic_similarity_score(resume, jd_text)
+        semantic_score, semantic_note = semantic_override or self._semantic_similarity_score(resume, jd_text)
         achievement_score, achievement_note = _achievement_score(raw_text)
         ownership_score, ownership_note = _ownership_score(resume)
 
@@ -101,6 +103,38 @@ class ResumeScoringEngine:
         score = float(np.dot(vectors[0], vectors[1]))
         mapped = max(0.0, min(100.0, (score + 1.0) * 50.0))
         return mapped, f"Semantic alignment score {mapped:.1f}/100 using local embeddings."
+
+    def batch_semantic_similarity_scores(
+        self,
+        resumes_by_id: Mapping[int, ParsedResume],
+        jd_text: str,
+    ) -> dict[int, tuple[float, str]]:
+        if not jd_text.strip() or not resumes_by_id:
+            return {resume_id: (0.0, "Insufficient text for semantic comparison.") for resume_id in resumes_by_id}
+
+        resume_ids: list[int] = []
+        resume_texts: list[str] = []
+        for resume_id, resume in resumes_by_id.items():
+            resume_ids.append(resume_id)
+            resume_texts.append(_build_resume_semantic_text(resume))
+
+        jd_vector = self.embedder.encode_text_cached(jd_text, normalize_embeddings=True)
+        resume_vectors = self.embedder.encode_texts_cached(resume_texts, normalize_embeddings=True)
+
+        results: dict[int, tuple[float, str]] = {}
+        for idx, resume_id in enumerate(resume_ids):
+            resume_text = resume_texts[idx]
+            if not resume_text.strip():
+                results[resume_id] = (0.0, "Insufficient text for semantic comparison.")
+                continue
+
+            score = float(np.dot(resume_vectors[idx], jd_vector))
+            mapped = max(0.0, min(100.0, (score + 1.0) * 50.0))
+            results[resume_id] = (
+                mapped,
+                f"Semantic alignment score {mapped:.1f}/100 using local embeddings.",
+            )
+        return results
 
 
 def _normalize_weights(weights: ScoringWeights) -> ScoringWeights:

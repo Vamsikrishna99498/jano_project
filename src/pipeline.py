@@ -53,17 +53,28 @@ class ResumeIngestionPipeline:
             raise ValueError(f"Job description id={job_description_id} not found.")
 
         rows = self.pg.list_resumes(job_description_id=job_description_id)
+        parsed_by_id = {
+            int(row["id"]): ParsedResume.model_validate(row["parsed_json"])
+            for row in rows
+        }
+        semantic_overrides = self.scoring.batch_semantic_similarity_scores(
+            resumes_by_id=parsed_by_id,
+            jd_text=str(jd["description"]),
+        )
+
         results: list[ResumeScoreResult] = []
         for row in rows:
-            parsed = ParsedResume.model_validate(row["parsed_json"])
+            resume_id = int(row["id"])
+            parsed = parsed_by_id[resume_id]
             result = self.scoring.score_resume(
-                resume_id=int(row["id"]),
+                resume_id=resume_id,
                 file_name=str(row["file_name"]),
                 resume=parsed,
                 raw_text=str(row["raw_text"]),
                 jd_text=str(jd["description"]),
                 weights=weights,
                 constraints=constraints,
+                semantic_override=semantic_overrides.get(resume_id),
             )
             results.append(result)
             self.pg.add_resume_score(
