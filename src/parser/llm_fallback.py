@@ -13,12 +13,12 @@ PROMPT_TEMPLATE = """
 You are a resume parser.
 Return valid JSON only, matching this schema keys exactly:
 - candidate_name: string or null
-- contact: {email, phone, location, linkedin, github, website}
+- contact: {{email, phone, location, linkedin, github, website}}
 - summary: string or null
 - skills: string[]
-- experience: [{title, company, start_date, end_date, description:string[]}]
-- education: [{degree, institution, start_date, end_date, details:string[]}]
-- projects: [{name, description:string[], links:string[]}]
+- experience: [{{title, company, start_date, end_date, description:string[]}}]
+- education: [{{degree, institution, start_date, end_date, details:string[]}}]
+- projects: [{{name, description:string[], links:string[]}}]
 - certifications: string[]
 - raw_sections: object
 
@@ -36,7 +36,7 @@ def run_llm_fallback(raw_text: str) -> tuple[ParsedResume, ParseDiagnostics]:
     else:
         raise ValueError(f"Unsupported LLM_MODE: {mode}")
 
-    resume = ParsedResume.model_validate(data)
+    resume = ParsedResume.model_validate(_normalize_payload(data))
     diagnostics = ParseDiagnostics(
         parser_mode=f"llm_{mode}",
         used_llm_fallback=True,
@@ -68,3 +68,85 @@ def _to_json(text: str) -> dict[str, Any]:
         if text.lower().startswith("json"):
             text = text[4:].strip()
     return json.loads(text)
+
+
+def _normalize_payload(data: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(data)
+
+    payload.setdefault("candidate_name", None)
+    payload.setdefault("summary", None)
+    payload.setdefault("raw_sections", {})
+
+    contact = payload.get("contact")
+    if not isinstance(contact, dict):
+        contact = {}
+    payload["contact"] = {
+        "email": contact.get("email"),
+        "phone": contact.get("phone"),
+        "location": contact.get("location"),
+        "linkedin": contact.get("linkedin"),
+        "github": contact.get("github"),
+        "website": contact.get("website"),
+    }
+
+    payload["skills"] = _as_str_list(payload.get("skills"))
+    payload["certifications"] = _as_str_list(payload.get("certifications"))
+
+    payload["experience"] = _normalize_items(
+        payload.get("experience"),
+        fields=("title", "company", "start_date", "end_date"),
+        list_field="description",
+    )
+    payload["education"] = _normalize_items(
+        payload.get("education"),
+        fields=("degree", "institution", "start_date", "end_date"),
+        list_field="details",
+    )
+    payload["projects"] = _normalize_items(
+        payload.get("projects"),
+        fields=("name",),
+        list_field="description",
+        second_list_field="links",
+    )
+
+    return payload
+
+
+def _normalize_items(
+    value: Any,
+    fields: tuple[str, ...],
+    list_field: str,
+    second_list_field: str | None = None,
+) -> list[dict[str, Any]]:
+    items = value if isinstance(value, list) else []
+    normalized: list[dict[str, Any]] = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        row: dict[str, Any] = {k: item.get(k, "") for k in fields}
+        row[list_field] = _as_str_list(item.get(list_field))
+        if second_list_field:
+            row[second_list_field] = _as_str_list(item.get(second_list_field))
+        normalized.append(row)
+
+    return normalized
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in value:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if text:
+                out.append(text)
+        return out
+    text = str(value).strip()
+    return [text] if text else []
