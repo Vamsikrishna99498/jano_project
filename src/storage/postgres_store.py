@@ -4,13 +4,14 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, Column, DateTime, Float, Integer, MetaData, String, Table, Text, create_engine
+from sqlalchemy import JSON, Column, DateTime, Float, Integer, MetaData, String, Table, Text, create_engine, func, select
 from sqlalchemy.engine import Engine
 
 from src.schemas import ParseResult, ResumeScoreResult, ScoringConstraints, ScoringWeights
 
 
 metadata = MetaData()
+MAX_VECTOR_SYNC_ATTEMPTS = 5
 
 job_descriptions = Table(
     "job_descriptions",
@@ -172,13 +173,17 @@ class PostgresStore:
             rows = conn.execute(query)
             return [dict(row._mapping) for row in rows]
 
-    def list_vector_sync_jobs(self, status: str = "pending", limit: int = 50) -> list[dict]:
-        query = (
-            vector_sync_jobs.select()
-            .where(vector_sync_jobs.c.status == status)
-            .order_by(vector_sync_jobs.c.id.asc())
-            .limit(max(1, int(limit)))
-        )
+    def list_vector_sync_jobs(
+        self,
+        status: str = "pending",
+        limit: int = 50,
+        max_attempts: int = MAX_VECTOR_SYNC_ATTEMPTS,
+    ) -> list[dict]:
+        query = vector_sync_jobs.select().where(vector_sync_jobs.c.status == status)
+        if status == "pending":
+            query = query.where(vector_sync_jobs.c.attempt_count < max(1, int(max_attempts)))
+
+        query = query.order_by(vector_sync_jobs.c.id.asc()).limit(max(1, int(limit)))
         with self.engine.begin() as conn:
             rows = conn.execute(query)
             return [dict(row._mapping) for row in rows]
@@ -204,12 +209,15 @@ class PostgresStore:
             if row is not None:
                 attempts = int(row._mapping.get("attempt_count") or 0)
 
+            next_attempts = attempts + 1
+            next_status = "failed" if next_attempts >= MAX_VECTOR_SYNC_ATTEMPTS else "pending"
+
             conn.execute(
                 vector_sync_jobs.update()
                 .where(vector_sync_jobs.c.id == job_id)
                 .values(
-                    status="pending",
-                    attempt_count=attempts + 1,
+                    status=next_status,
+                    attempt_count=next_attempts,
                     last_error=error[:1000],
                     updated_at=datetime.utcnow(),
                 )
@@ -218,14 +226,18 @@ class PostgresStore:
     def get_vector_sync_summary(self) -> dict[str, int]:
         with self.engine.begin() as conn:
             pending = conn.execute(
-                vector_sync_jobs.select().where(vector_sync_jobs.c.status == "pending")
-            ).fetchall()
+                select(func.count()).select_from(vector_sync_jobs).where(vector_sync_jobs.c.status == "pending")
+            ).scalar_one()
             done = conn.execute(
-                vector_sync_jobs.select().where(vector_sync_jobs.c.status == "done")
-            ).fetchall()
+                select(func.count()).select_from(vector_sync_jobs).where(vector_sync_jobs.c.status == "done")
+            ).scalar_one()
+            failed = conn.execute(
+                select(func.count()).select_from(vector_sync_jobs).where(vector_sync_jobs.c.status == "failed")
+            ).scalar_one()
             return {
-                "pending": len(pending),
-                "done": len(done),
+                "pending": int(pending),
+                "done": int(done),
+                "failed": int(failed),
             }
 
     def add_resume_score(

@@ -64,8 +64,8 @@ class ResumeIngestionPipeline:
         }
         return resume_id, parse_result
 
-    def retry_pending_vector_sync_jobs(self, limit: int = 25) -> tuple[int, int]:
-        rows = self.pg.list_vector_sync_jobs(status="pending", limit=limit)
+    def retry_pending_vector_sync_jobs(self, limit: int = 25, max_attempts: int = 5) -> tuple[int, int]:
+        rows = self.pg.list_vector_sync_jobs(status="pending", limit=limit, max_attempts=max_attempts)
         success = 0
         failed = 0
 
