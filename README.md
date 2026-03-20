@@ -191,6 +191,10 @@ Run parser QA fixtures:
 python scripts/run_parser_qa.py
 ```
 
+## Validation Notes
+
+Detailed validation rationale and latest run outcomes are documented in `SYSTEM_DESIGN.md` under the validation section.
+
 ## Database Reset (Local)
 
 Reset all project tables by recreating `public` schema:

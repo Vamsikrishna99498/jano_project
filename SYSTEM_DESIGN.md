@@ -255,13 +255,65 @@ Configuration is environment-driven (`src/config.py`):
 
 ## 10. Validation and Benchmarking
 
-Included scripts provide repeatable quality/performance checks:
+### 10.1 Validation Layers and Purpose
 
-- `scripts/run_parser_qa.py`: parser QA on mildly unstructured samples.
-- `scripts/run_small_scoring_eval.py`: top-1/top-k/rejection correctness checks.
-- `scripts/run_small_scoring_stability.py`: randomized stability under weight/text perturbation.
-- `scripts/benchmark_option_a.py`: throughput and latency benchmarking.
-- `scripts/seed_benchmark_resumes.py`: synthetic large-set data seeding.
+The project uses four validation layers, each answering a different quality question.
+
+Parser QA:
+
+- Question: Can parser output be trusted for structured extraction?
+- Checks: skills/contact/experience/summary extraction from varied text styles.
+- Why: parsing quality is the base for all downstream scoring.
+- Script: `scripts/run_parser_qa.py`.
+
+Scoring Evaluation:
+
+- Question: Are ranking and strict rejection rules correct?
+- Checks: Top-1, Top-K, strict rejection checks, false-positive rejection checks.
+- Why: recruiter decisions depend on ranking and rule consistency.
+- Script: `scripts/run_small_scoring_eval.py` (optional `--e2e-parse`).
+
+Stability Validation:
+
+- Question: Are outcomes stable under small input/weight variation?
+- Checks: ranking and rejection consistency across repeated randomized runs.
+- Why: real-world resumes and recruiter weight preferences vary.
+- Script: `scripts/run_small_scoring_stability.py`.
+
+Benchmark Validation:
+
+- Question: Can scoring throughput meet practical workload targets?
+- Checks: rows/sec, p95 throughput, projected rows/day, compute-only vs DB-inclusive behavior.
+- Why: quality alone is not enough; runtime must support daily operations.
+- Scripts: `scripts/benchmark_option_a.py` and `scripts/seed_benchmark_resumes.py`.
+
+### 10.2 Latest Run Summary (2026-03-20)
+
+Parser QA:
+
+- Result: all parser fixtures passed.
+- Confidence: healthy average confidence across samples.
+
+Scoring Evaluation (with parser e2e):
+
+- Result: Top-1, Top-K, rejection, and strict checks all passed.
+- End-to-end parser + scoring checks also passed.
+
+Stability Validation (20 iterations, strict mode):
+
+- Result: ranking and rejection behavior remained stable.
+
+Benchmark Validation:
+
+- Setup: benchmark JD prepared and synthetic resumes seeded locally.
+- Result: throughput exceeded target in both compute-only and DB-inclusive runs.
+
+Overall status:
+
+- parser validation passed
+- scoring validation passed
+- stability validation passed
+- benchmark validation passed
 
 ## 11. Known Constraints
 
