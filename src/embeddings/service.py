@@ -26,7 +26,10 @@ class EmbeddingService:
 
     @property
     def dimension(self) -> int:
-        return int(self._model.get_sentence_embedding_dimension())
+        dimension = self._model.get_sentence_embedding_dimension()
+        if dimension is None:
+            raise RuntimeError("Embedding model did not report vector dimension.")
+        return int(dimension)
 
     def encode_texts(self, texts: list[str], normalize_embeddings: bool = True) -> np.ndarray:
         vectors = self._model.encode(texts, normalize_embeddings=normalize_embeddings)
