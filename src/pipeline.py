@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Optional
 
 from src.config import settings
@@ -37,9 +38,25 @@ class ResumeIngestionPipeline:
         content: bytes,
         job_description_id: Optional[int],
     ) -> tuple[int, ParseResult]:
+        started = perf_counter()
+        parse_started = perf_counter()
         parse_result = self.parser.parse(file_name=file_name, content=content)
+        parse_ms = (perf_counter() - parse_started) * 1000.0
+
+        db_started = perf_counter()
         resume_id = self.pg.add_resume(parse_result=parse_result, job_description_id=job_description_id)
+        db_insert_ms = (perf_counter() - db_started) * 1000.0
+
+        vector_started = perf_counter()
         self.faiss.add_resume_text(resume_id=resume_id, text=parse_result.raw_text)
+        vector_upsert_ms = (perf_counter() - vector_started) * 1000.0
+
+        parse_result.diagnostics.timing_ms = {
+            "parse": round(parse_ms, 2),
+            "db_insert": round(db_insert_ms, 2),
+            "vector_upsert": round(vector_upsert_ms, 2),
+            "total": round((perf_counter() - started) * 1000.0, 2),
+        }
         return resume_id, parse_result
 
     def score_resumes_for_job(
@@ -48,24 +65,35 @@ class ResumeIngestionPipeline:
         weights: ScoringWeights,
         constraints: ScoringConstraints,
     ) -> list[ResumeScoreResult]:
+        started = perf_counter()
         jd = self.pg.get_job_description(job_description_id)
         if jd is None:
             raise ValueError(f"Job description id={job_description_id} not found.")
 
+        fetch_started = perf_counter()
         rows = self.pg.list_resumes(job_description_id=job_description_id)
+        fetch_rows_ms = (perf_counter() - fetch_started) * 1000.0
+
         parsed_by_id = {
             int(row["id"]): ParsedResume.model_validate(row["parsed_json"])
             for row in rows
         }
+
+        semantic_started = perf_counter()
         semantic_overrides = self.scoring.batch_semantic_similarity_scores(
             resumes_by_id=parsed_by_id,
             jd_text=str(jd["description"]),
         )
+        semantic_batch_ms = (perf_counter() - semantic_started) * 1000.0
 
         results: list[ResumeScoreResult] = []
+        scoring_total_ms = 0.0
+        db_write_total_ms = 0.0
         for row in rows:
             resume_id = int(row["id"])
             parsed = parsed_by_id[resume_id]
+
+            score_started = perf_counter()
             result = self.scoring.score_resume(
                 resume_id=resume_id,
                 file_name=str(row["file_name"]),
@@ -76,6 +104,10 @@ class ResumeIngestionPipeline:
                 constraints=constraints,
                 semantic_override=semantic_overrides.get(resume_id),
             )
+            score_ms = (perf_counter() - score_started) * 1000.0
+            scoring_total_ms += score_ms
+
+            db_write_started = perf_counter()
             results.append(result)
             self.pg.add_resume_score(
                 score=result,
@@ -84,6 +116,25 @@ class ResumeIngestionPipeline:
                 constraints=constraints,
                 scoring_version=self.scoring_version,
             )
+            db_write_ms = (perf_counter() - db_write_started) * 1000.0
+            db_write_total_ms += db_write_ms
+
+            result.timing_ms = {
+                "score_compute": round(score_ms, 2),
+                "db_write": round(db_write_ms, 2),
+            }
 
         results.sort(key=lambda x: x.total_score, reverse=True)
+
+        total_ms = (perf_counter() - started) * 1000.0
+        run_metrics = {
+            "fetch_rows": round(fetch_rows_ms, 2),
+            "semantic_batch": round(semantic_batch_ms, 2),
+            "score_compute_total": round(scoring_total_ms, 2),
+            "db_write_total": round(db_write_total_ms, 2),
+            "total": round(total_ms, 2),
+        }
+        for result in results:
+            result.timing_ms.update(run_metrics)
+
         return results

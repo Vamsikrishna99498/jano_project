@@ -53,6 +53,7 @@ class ParseDiagnostics(BaseModel):
     used_llm_fallback: bool = False
     confidence: float = 0.0
     reasons: List[str] = Field(default_factory=list)
+    timing_ms: dict[str, float] = Field(default_factory=dict)
 
 
 class ParseResult(BaseModel):
@@ -98,3 +99,4 @@ class ResumeScoreResult(BaseModel):
     rejection_reasons: List[str] = Field(default_factory=list)
     dimension_scores: List[DimensionScore] = Field(default_factory=list)
     recruiter_explanation: str = ""
+    timing_ms: dict[str, float] = Field(default_factory=dict)

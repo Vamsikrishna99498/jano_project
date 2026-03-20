@@ -110,6 +110,13 @@ def main() -> None:
                 st.caption(
                     f"Parser mode: {result.diagnostics.parser_mode} | reasons: {', '.join(result.diagnostics.reasons) or 'none'}"
                 )
+                if result.diagnostics.timing_ms:
+                    st.caption(
+                        "Parse timing (ms): "
+                        + ", ".join(
+                            [f"{k}={v:.2f}" for k, v in result.diagnostics.timing_ms.items()]
+                        )
+                    )
             except Exception as exc:
                 st.error(f"{file.name}: {str(exc)}")
 
@@ -189,6 +196,11 @@ def main() -> None:
                         for d in row.dimension_scores
                     ]
                 )
+                if row.timing_ms:
+                    st.caption(
+                        "Scoring timing (ms): "
+                        + ", ".join([f"{k}={v:.2f}" for k, v in row.timing_ms.items()])
+                    )
 
 
 def _split_csv(value: str) -> list[str]:
