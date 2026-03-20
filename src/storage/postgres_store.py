@@ -165,10 +165,42 @@ class PostgresStore:
 
             return int(resume_id), int(job_id)
 
+    def add_resumes_bulk(self, resume_rows: list[dict]) -> int:
+        if not resume_rows:
+            return 0
+        with self.engine.begin() as conn:
+            conn.execute(resumes.insert(), resume_rows)
+        return len(resume_rows)
+
     def list_resumes(self, job_description_id: Optional[int] = None) -> list[dict]:
         query = resumes.select().order_by(resumes.c.id.desc())
         if job_description_id is not None:
             query = query.where(resumes.c.job_description_id == job_description_id)
+        with self.engine.begin() as conn:
+            rows = conn.execute(query)
+            return [dict(row._mapping) for row in rows]
+
+    def count_resumes(self, job_description_id: Optional[int] = None) -> int:
+        query = select(func.count()).select_from(resumes)
+        if job_description_id is not None:
+            query = query.where(resumes.c.job_description_id == job_description_id)
+        with self.engine.begin() as conn:
+            value = conn.execute(query).scalar_one()
+            return int(value)
+
+    def list_resumes_page(
+        self,
+        job_description_id: int,
+        limit: int,
+        offset: int,
+    ) -> list[dict]:
+        query = (
+            resumes.select()
+            .where(resumes.c.job_description_id == job_description_id)
+            .order_by(resumes.c.id.desc())
+            .limit(max(1, int(limit)))
+            .offset(max(0, int(offset)))
+        )
         with self.engine.begin() as conn:
             rows = conn.execute(query)
             return [dict(row._mapping) for row in rows]
@@ -270,6 +302,41 @@ class PostgresStore:
             if inserted_id is None:
                 raise RuntimeError("Failed to insert resume score: missing inserted primary key.")
             return int(inserted_id)
+
+    def add_resume_scores_bulk(
+        self,
+        scores: list[ResumeScoreResult],
+        job_description_id: int,
+        weights: ScoringWeights,
+        constraints: ScoringConstraints,
+        scoring_version: str,
+    ) -> int:
+        if not scores:
+            return 0
+
+        now = datetime.utcnow()
+        payload = [
+            {
+                "resume_id": score.resume_id,
+                "job_description_id": job_description_id,
+                "file_name": score.file_name,
+                "candidate_name": score.candidate_name,
+                "total_score": score.total_score,
+                "rejected": 1 if score.rejected else 0,
+                "rejection_reasons": ",".join(score.rejection_reasons),
+                "dimension_scores": [d.model_dump() for d in score.dimension_scores],
+                "recruiter_explanation": score.recruiter_explanation,
+                "weights_json": weights.model_dump(),
+                "constraints_json": constraints.model_dump(),
+                "scoring_version": scoring_version,
+                "created_at": now,
+            }
+            for score in scores
+        ]
+
+        with self.engine.begin() as conn:
+            conn.execute(resume_scores.insert(), payload)
+        return len(scores)
 
     def list_resume_scores(self, job_description_id: Optional[int] = None) -> list[dict]:
         query = resume_scores.select().order_by(resume_scores.c.id.desc())

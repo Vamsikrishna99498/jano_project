@@ -24,6 +24,8 @@ class ResumeIngestionPipeline:
         )
         self.scoring = ResumeScoringEngine(embedder=self.embedder)
         self.scoring_version = "phase2.v2"
+        self.scoring_page_size = 500
+        self.scoring_db_write_batch_size = 200
         self.pg.init_db()
 
     def create_job_description(self, title: str, description: str) -> int:
@@ -99,70 +101,111 @@ class ResumeIngestionPipeline:
         job_description_id: int,
         weights: ScoringWeights,
         constraints: ScoringConstraints,
+        persist_scores: bool = True,
+        max_resumes: int | None = None,
     ) -> list[ResumeScoreResult]:
         started = perf_counter()
         jd = self.pg.get_job_description(job_description_id)
         if jd is None:
             raise ValueError(f"Job description id={job_description_id} not found.")
 
-        fetch_started = perf_counter()
-        rows = self.pg.list_resumes(job_description_id=job_description_id)
-        fetch_rows_ms = (perf_counter() - fetch_started) * 1000.0
-
-        parsed_by_id = {
-            int(row["id"]): ParsedResume.model_validate(row["parsed_json"])
-            for row in rows
-        }
-
-        semantic_started = perf_counter()
-        semantic_overrides = self.scoring.batch_semantic_similarity_scores(
-            resumes_by_id=parsed_by_id,
-            jd_text=str(jd["description"]),
-        )
-        semantic_batch_ms = (perf_counter() - semantic_started) * 1000.0
-
         results: list[ResumeScoreResult] = []
+        fetched_rows_total = 0
+        fetch_rows_ms = 0.0
+        semantic_batch_ms = 0.0
         scoring_total_ms = 0.0
         db_write_total_ms = 0.0
-        for row in rows:
-            resume_id = int(row["id"])
-            parsed = parsed_by_id[resume_id]
 
-            score_started = perf_counter()
-            result = self.scoring.score_resume(
-                resume_id=resume_id,
-                file_name=str(row["file_name"]),
-                resume=parsed,
-                raw_text=str(row["raw_text"]),
-                jd_text=str(jd["description"]),
-                weights=weights,
-                constraints=constraints,
-                semantic_override=semantic_overrides.get(resume_id),
-            )
-            score_ms = (perf_counter() - score_started) * 1000.0
-            scoring_total_ms += score_ms
+        offset = 0
+        max_rows = max_resumes if max_resumes is None else max(0, int(max_resumes))
+        while True:
+            if max_rows is not None and fetched_rows_total >= max_rows:
+                break
 
-            db_write_started = perf_counter()
-            results.append(result)
-            self.pg.add_resume_score(
-                score=result,
+            page_limit = self.scoring_page_size
+            if max_rows is not None:
+                page_limit = min(page_limit, max_rows - fetched_rows_total)
+                if page_limit <= 0:
+                    break
+
+            fetch_started = perf_counter()
+            rows = self.pg.list_resumes_page(
                 job_description_id=job_description_id,
-                weights=weights,
-                constraints=constraints,
-                scoring_version=self.scoring_version,
+                limit=page_limit,
+                offset=offset,
             )
-            db_write_ms = (perf_counter() - db_write_started) * 1000.0
-            db_write_total_ms += db_write_ms
+            fetch_rows_ms += (perf_counter() - fetch_started) * 1000.0
+            if not rows:
+                break
 
-            result.timing_ms = {
-                "score_compute": round(score_ms, 2),
-                "db_write": round(db_write_ms, 2),
+            fetched_rows_total += len(rows)
+            parsed_by_id = {
+                int(row["id"]): ParsedResume.model_validate(row["parsed_json"])
+                for row in rows
             }
+
+            semantic_started = perf_counter()
+            semantic_overrides = self.scoring.batch_semantic_similarity_scores(
+                resumes_by_id=parsed_by_id,
+                jd_text=str(jd["description"]),
+            )
+            semantic_batch_ms += (perf_counter() - semantic_started) * 1000.0
+
+            pending_db_rows: list[ResumeScoreResult] = []
+            for row in rows:
+                resume_id = int(row["id"])
+                parsed = parsed_by_id[resume_id]
+
+                score_started = perf_counter()
+                result = self.scoring.score_resume(
+                    resume_id=resume_id,
+                    file_name=str(row["file_name"]),
+                    resume=parsed,
+                    raw_text=str(row["raw_text"]),
+                    jd_text=str(jd["description"]),
+                    weights=weights,
+                    constraints=constraints,
+                    semantic_override=semantic_overrides.get(resume_id),
+                )
+                score_ms = (perf_counter() - score_started) * 1000.0
+                scoring_total_ms += score_ms
+
+                result.timing_ms = {
+                    "score_compute": round(score_ms, 2),
+                }
+                results.append(result)
+                pending_db_rows.append(result)
+
+                if persist_scores and len(pending_db_rows) >= self.scoring_db_write_batch_size:
+                    db_write_started = perf_counter()
+                    self.pg.add_resume_scores_bulk(
+                        scores=pending_db_rows,
+                        job_description_id=job_description_id,
+                        weights=weights,
+                        constraints=constraints,
+                        scoring_version=self.scoring_version,
+                    )
+                    db_write_total_ms += (perf_counter() - db_write_started) * 1000.0
+                    pending_db_rows = []
+
+            if persist_scores and pending_db_rows:
+                db_write_started = perf_counter()
+                self.pg.add_resume_scores_bulk(
+                    scores=pending_db_rows,
+                    job_description_id=job_description_id,
+                    weights=weights,
+                    constraints=constraints,
+                    scoring_version=self.scoring_version,
+                )
+                db_write_total_ms += (perf_counter() - db_write_started) * 1000.0
+
+            offset += self.scoring_page_size
 
         results.sort(key=lambda x: x.total_score, reverse=True)
 
         total_ms = (perf_counter() - started) * 1000.0
         run_metrics = {
+            "rows": fetched_rows_total,
             "fetch_rows": round(fetch_rows_ms, 2),
             "semantic_batch": round(semantic_batch_ms, 2),
             "score_compute_total": round(scoring_total_ms, 2),

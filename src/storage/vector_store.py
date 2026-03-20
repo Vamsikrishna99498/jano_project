@@ -30,28 +30,30 @@ class FaissVectorStore:
         self.dimension = self.embedder.dimension
         self.records = self._load_records()
         self._resume_id_to_record_idx = self._build_resume_id_map()
-        self.index = self._rebuild_index()
+        self.index = self._load_or_rebuild_index()
 
     def add_resume_text(self, resume_id: int, text: str) -> None:
         vector = self.embedder.encode_texts([text], normalize_embeddings=True)[0]
         existing_idx = self._resume_id_to_record_idx.get(resume_id)
+        rid = np.array([int(resume_id)], dtype="int64")
+
+        # Incremental update: remove old id (if any) and upsert this vector.
+        self.index.remove_ids(rid)
+        self.index.add_with_ids(vector.reshape(1, -1), rid)
 
         if existing_idx is not None:
             self.records[existing_idx]["preview"] = text[:300]
-            self.records[existing_idx]["embedding"] = vector.tolist()
             self.records[existing_idx]["active"] = True
         else:
             self.records.append(
                 {
                     "resume_id": resume_id,
                     "preview": text[:300],
-                    "embedding": vector.tolist(),
                     "active": True,
                 }
             )
 
         self._resume_id_to_record_idx = self._build_resume_id_map()
-        self.index = self._rebuild_index()
         self._save()
 
     def delete_resume(self, resume_id: int) -> bool:
@@ -60,42 +62,66 @@ class FaissVectorStore:
             return False
 
         self.records[existing_idx]["active"] = False
+        self.index.remove_ids(np.array([int(resume_id)], dtype="int64"))
         self._resume_id_to_record_idx = self._build_resume_id_map()
-        self.index = self._rebuild_index()
         self._save()
         return True
 
     def reindex(self) -> None:
         self._resume_id_to_record_idx = self._build_resume_id_map()
-        self.index = self._rebuild_index()
+        if not any(isinstance(r.get("embedding"), list) for r in self.records):
+            # Compact metadata mode stores vectors only in FAISS; keep current index as source of truth.
+            self._save()
+            return
+        self.index = self._rebuild_index_from_metadata()
         self._save()
 
     def search(self, query: str, top_k: int = 5) -> list[dict]:
         if self.index.ntotal == 0:
             return []
         qv = self.embedder.encode_texts([query], normalize_embeddings=True)
-        scores, indices = self.index.search(qv, top_k)
-        active_records = self._active_records()
+        scores, ids = self.index.search(qv, top_k)
 
         results = []
-        for score, idx in zip(scores[0], indices[0]):
-            if idx < 0 or idx >= len(active_records):
+        for score, rid in zip(scores[0], ids[0]):
+            if rid < 0:
                 continue
-            item = dict(active_records[idx])
-            item.pop("embedding", None)
+            record = self._record_by_resume_id(int(rid))
+            if record is None or not record.get("active", True):
+                continue
+            item = dict(record)
             item.pop("active", None)
             item["score"] = float(score)
             results.append(item)
         return results
 
-    def _rebuild_index(self):
-        index = faiss.IndexFlatIP(self.dimension)
+    def _new_index(self) -> faiss.IndexIDMap2:
+        return faiss.IndexIDMap2(faiss.IndexFlatIP(self.dimension))
+
+    def _load_or_rebuild_index(self) -> faiss.IndexIDMap2:
+        if self.index_path.exists():
+            loaded = faiss.read_index(str(self.index_path))
+            if hasattr(loaded, "add_with_ids") and hasattr(loaded, "remove_ids"):
+                return loaded
+
+            # Convert legacy flat index by rebuilding from metadata records.
+            return self._rebuild_index_from_metadata()
+        return self._rebuild_index_from_metadata()
+
+    def _rebuild_index_from_metadata(self) -> faiss.IndexIDMap2:
+        index = self._new_index()
         active_records = self._active_records()
         if not active_records:
             return index
 
-        vectors = np.array([r["embedding"] for r in active_records], dtype="float32")
-        index.add(vectors)
+        # Rebuild is supported only for legacy metadata that still contains embeddings.
+        with_embeddings = [r for r in active_records if isinstance(r.get("embedding"), list)]
+        if not with_embeddings:
+            return index
+
+        vectors = np.array([r["embedding"] for r in with_embeddings], dtype="float32")
+        ids = np.array([int(r["resume_id"]) for r in with_embeddings], dtype="int64")
+        index.add_with_ids(vectors, ids)
         return index
 
     def _load_records(self) -> list[dict[str, Any]]:
@@ -126,11 +152,12 @@ class FaissVectorStore:
                     if not isinstance(item, dict):
                         continue
                     resume_id = item.get("resume_id")
-                    embedding = item.get("embedding")
                     if not isinstance(resume_id, int):
                         continue
-                    if not isinstance(embedding, list) or len(embedding) != self.dimension:
-                        continue
+                    embedding = item.get("embedding")
+                    if embedding is not None:
+                        if not isinstance(embedding, list) or len(embedding) != self.dimension:
+                            continue
                     records.append(
                         {
                             "resume_id": resume_id,
@@ -153,12 +180,27 @@ class FaissVectorStore:
         return mapping
 
     def _active_records(self) -> list[dict[str, Any]]:
-        return [r for r in self.records if r.get("active", True) and len(r.get("embedding", [])) == self.dimension]
+        return [r for r in self.records if r.get("active", True)]
+
+    def _record_by_resume_id(self, resume_id: int) -> dict[str, Any] | None:
+        idx = self._resume_id_to_record_idx.get(resume_id)
+        if idx is None:
+            return None
+        return self.records[idx]
 
     def _save(self) -> None:
         faiss.write_index(self.index, str(self.index_path))
+        # Persist only lightweight metadata; vectors live in the FAISS index file.
+        compact_records = [
+            {
+                "resume_id": int(r["resume_id"]),
+                "preview": str(r.get("preview", "")),
+                "active": bool(r.get("active", True)),
+            }
+            for r in self.records
+        ]
         payload = {
-            "schema_version": 2,
-            "records": self.records,
+            "schema_version": 3,
+            "records": compact_records,
         }
         self.meta_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
