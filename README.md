@@ -3,6 +3,17 @@
 Phase 1 implements a local-first smart parser pipeline for resumes.
 Phase 2 adds a multi-dimensional scoring engine with recruiter-configurable weights.
 
+## Assignment Deliverables Mapping
+
+- System Design Document: see `SYSTEM_DESIGN.md`
+- Implementation: Option A (Evaluation and Scoring Engine) implemented in this repository
+- README: this file includes setup, architecture summary, and execution flow
+
+Current scope statement:
+
+- Deep implementation focus is Option A.
+- Option B (Claim Verification) and Option C (Tiering + Question Generator) are included as future-ready architecture plans in `SYSTEM_DESIGN.md`.
+
 ## What is included
 
 - PDF and Word resume ingestion (`.pdf`, `.docx`, `.doc`)
