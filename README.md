@@ -1,6 +1,7 @@
-# AI Resume Shortlisting - Phase 1
+# AI Resume Shortlisting - Phase 1 + Phase 2
 
 Phase 1 implements a local-first smart parser pipeline for resumes.
+Phase 2 adds a multi-dimensional scoring engine with recruiter-configurable weights.
 
 ## What is included
 
@@ -11,6 +12,9 @@ Phase 1 implements a local-first smart parser pipeline for resumes.
 - PostgreSQL persistence for parsed outputs
 - FAISS vector indexing for resume chunks/embeddings
 - Streamlit UI for local operation
+- Multi-dimensional scoring engine (Exact Match, Semantic Similarity, Impact, Ownership)
+- Strict rejection rules (minimum years, degree constraints, certification constraints)
+- Recruiter-facing short explanation for each scored resume
 
 ## Local Architecture
 
@@ -20,6 +24,47 @@ Phase 1 implements a local-first smart parser pipeline for resumes.
 4. If enabled and quality is low, LLM fallback attempts strict JSON extraction.
 5. Structured record is stored in PostgreSQL.
 6. Resume text embedding is stored in a local FAISS index.
+7. Recruiter selects per-role weights and strict constraints, then runs Phase 2 scoring.
+
+## Phase 2 Scoring
+
+Dimensions:
+
+- Exact Match: required skill matching and JD skill-term overlap.
+- Semantic Similarity: local embedding similarity between resume profile text and JD text.
+- Impact: quantified outcomes and impact language signals.
+- Ownership: lead/ownership language strength.
+
+Strict rejection rules:
+
+- Minimum years of experience.
+- Required degree keywords.
+- Required certifications.
+
+Scoring target:
+
+- Designed for local execution with practical latency target under 3 seconds per resume on typical developer hardware.
+
+## Why This Transformer
+
+Embedding model: `sentence-transformers/all-MiniLM-L6-v2`
+
+Why chosen in this project:
+
+- Local and free to run, matching your no-paid-services requirement.
+- Fast inference suitable for recruiter workflows and sub-3s scoring targets.
+- Strong enough semantic quality for JD-resume alignment without heavier infrastructure.
+- Reused across FAISS indexing and semantic scoring to keep behavior consistent.
+
+When to upgrade in future:
+
+- If you need higher semantic precision for niche roles, a stronger local model can be added as an optional profile.
+
+## Chunking Strategy (Future)
+
+- Current implementation does not apply chunking in Phase 2 scoring.
+- As requested, no chunking strategy will be implemented until you provide your preferred strategy.
+- Before any chunking changes, you will be asked to approve exact rules (chunk size, overlap, section-aware behavior, and weighting).
 
 ## Setup
 
