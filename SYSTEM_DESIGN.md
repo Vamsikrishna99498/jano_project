@@ -1,322 +1,280 @@
-# Assignment 5 - System Design Document
+# System Design
 
-## 1. Overview
+## 1. Problem Statement
 
-This project is an AI Resume Shortlisting and Interview Assistant system designed for local-first execution.
+Build a practical, local-first resume intelligence system that:
 
-Current implementation depth is focused on **Option A (Evaluation and Scoring Engine)**.
+- ingests resumes and job descriptions,
+- parses resumes into structured data,
+- scores candidates against a selected JD,
+- provides explainable recruiter-facing output,
+- runs with minimal infrastructure complexity.
 
-Future-ready design is included for:
+Current implementation depth is Option A (evaluation and scoring engine).
 
-- **Option B**: Claim Verification Engine (GitHub/LinkedIn authenticity and activity checks)
-- **Option C**: Tiering and Interview Question Generator
+## 2. Design Goals
 
-The design is modular so these can be added without rewriting core ingestion and scoring.
+- Local-first operation with PostgreSQL + FAISS.
+- Deterministic default parsing path (no paid API dependency required).
+- Optional LLM fallback for low-confidence parse cases.
+- Explainable scoring, including strict-rule rejection reasons.
+- Scoring pipeline that can process large JD-linked resume sets efficiently.
 
-## 2. Goals and Scope
-
-### In Scope (Implemented)
-
-- Parse resume files (`pdf`, `docx`, `doc`) into structured JSON.
-- Parse job descriptions and auto-extract constraints (skills, degree hints, min years).
-- Compute multi-dimensional score:
-  - Exact Match
-  - Semantic Similarity
-  - Achievement
-  - Ownership
-- Provide recruiter-friendly explanation and strict rejection reasons.
-- Persist data in PostgreSQL and store local vectors in FAISS.
-
-### In Scope (Designed, Future Add-ons)
-
-- Claim Verification Engine (Option B).
-- Tier A/B/C classification and Interview Question Generator (Option C).
-
-### Out of Scope (Current)
-
-- Full distributed deployment code.
-- Real-time external social API integrations in production mode.
-
-## 3. High-Level Architecture
+## 3. Architecture Overview
 
 ```mermaid
 flowchart LR
-    A[Streamlit UI] --> B[Ingestion Pipeline]
-    B --> C[Parser Engine]
-    C --> D[Structured Resume JSON]
-    B --> E[PostgreSQL]
-    B --> F[Embedding Service]
-    F --> G[FAISS Vector Store]
-    B --> H[Scoring Engine]
-    H --> E
-    H --> I[Recruiter Explanations]
-
-    D -. future .-> J[Verification Engine]
-    D -. future .-> K[Tiering Engine]
-    K -. future .-> L[Question Generator]
+    UI[Streamlit UI] --> PIPE[ResumeIngestionPipeline]
+    PIPE --> PARSER[SmartParser]
+    PARSER --> HEUR[Code-first Heuristic Parser]
+    PARSER --> LLM[LLM Fallback Optional]
+    PIPE --> DB[(PostgreSQL)]
+    PIPE --> EMB[EmbeddingService]
+    EMB --> VEC[(FAISS Index)]
+    PIPE --> SCORE[ResumeScoringEngine]
+    SCORE --> DB
+    SCORE --> UI
 ```
 
-### Component Responsibilities
+## 4. Core Components
 
-- **UI**: Upload resumes/JDs, trigger scoring, view ranked outputs.
-- **Parser Engine**: Deterministic parse first, optional LLM fallback when confidence is low.
-- **Scoring Engine**: Produces four scores plus final weighted score and explanation.
-- **Embedding Service**: Encodes resume and JD text for semantic alignment.
-- **Storage**: PostgreSQL for records and history, FAISS for fast local vector operations.
-- **Future Verification Engine**: Adds confidence on social/public claims.
-- **Future Tiering + Question Engine**: Converts scores/profile into interview paths.
+### 4.1 Streamlit UI
 
-## 4. End-to-End Data Flow
+Responsibilities:
+
+- collect JD input and optional JD files,
+- upload resumes,
+- trigger parse and scoring,
+- display parsed payload, diagnostics, and ranked scoring output.
+
+UI enforces resume upload guardrails:
+
+- ideal size: < 1 MB,
+- hard limit: 2 MB.
+
+### 4.2 Orchestration Pipeline
+
+`ResumeIngestionPipeline` coordinates:
+
+1. parse resume,
+2. save parsed output,
+3. queue vector sync,
+4. attempt immediate FAISS upsert,
+5. retry pending vector jobs,
+6. batch score resumes page-by-page,
+7. bulk-persist score rows.
+
+### 4.3 Smart Parser
+
+`SmartParser` strategy:
+
+- extract text from file,
+- parse with deterministic code-first heuristics,
+- compute confidence and sparse-signal checks,
+- if needed, run LLM fallback,
+- merge fallback output when beneficial.
+
+Fallback mode is configurable via env vars:
+
+- `LLM_MODE=none|openai|anthropic`
+- `FORCE_LLM_ONLY=true|false`
+
+### 4.4 Scoring Engine
+
+`ResumeScoringEngine` computes four dimensions:
+
+- Exact Match
+- Semantic Similarity
+- Achievement
+- Ownership
+
+It then:
+
+- normalizes weights,
+- applies strict rejection checks,
+- caps rejected totals at 40,
+- emits dimension notes and recruiter explanation payload.
+
+### 4.5 Embedding and Vector Layer
+
+`EmbeddingService`:
+
+- loads sentence-transformers model once per model name,
+- supports per-text and batch encode,
+- includes LRU-style in-memory embedding cache.
+
+`FaissVectorStore`:
+
+- stores vectors keyed by resume id,
+- supports incremental upsert (`remove_ids` + `add_with_ids`),
+- persists index to disk and metadata to JSON,
+- supports search and delete.
+
+### 4.6 Persistence Layer
+
+`PostgresStore` provides table creation and CRUD helpers for:
+
+- job descriptions,
+- parsed resumes,
+- score history,
+- vector sync queue state.
+
+## 5. Data Model
+
+Main tables:
+
+- `job_descriptions`
+- `resumes`
+- `resume_scores`
+- `vector_sync_jobs`
+
+Design highlights:
+
+- Parsed resume payload stored as JSON (`parsed_json`).
+- Scoring dimension breakdown stored as JSON (`dimension_scores`).
+- `recruiter_explanation` stored as text JSON string for direct UI display.
+- Vector sync reliability handled via queue table with status and retry counts.
+
+## 6. End-to-End Flows
+
+### 6.1 Parse + Persist + Vector Sync
 
 ```mermaid
 sequenceDiagram
-    participant U as Recruiter
-    participant UI as Streamlit UI
+    participant UI as Streamlit
     participant P as Pipeline
-    participant R as Parser
+    participant SP as SmartParser
     participant DB as PostgreSQL
-    participant EMB as Embedding Service
     participant VS as FAISS
-    participant S as Scoring Engine
 
-    U->>UI: Upload JD + resumes
     UI->>P: process_resume(file, jd_id)
-    P->>R: Parse resume text
-    R-->>P: ParsedResume + confidence
-    P->>DB: Save raw + parsed JSON
-    P->>EMB: Create embeddings
-    EMB->>VS: Upsert vectors
-    U->>UI: Run scoring
-    UI->>P: score_resumes_for_job(jd_id)
-    P->>S: Score each resume
-    S-->>P: Dimension scores + explanation
-    P->>DB: Save score history
-    P-->>UI: Ranked candidates
+    P->>SP: parse(file)
+    SP-->>P: ParseResult + diagnostics
+    P->>DB: insert resume + pending vector_sync_job
+    P->>VS: add_resume_text(resume_id, raw_text)
+    alt vector success
+        P->>DB: mark vector job done
+    else vector failure
+        P->>DB: increment attempt, keep pending/failed
+    end
+    P-->>UI: parse result + timing metrics
 ```
 
-## 5. Data Strategy
+### 6.2 Scoring Flow
+
+```mermaid
+sequenceDiagram
+    participant UI as Streamlit
+    participant P as Pipeline
+    participant DB as PostgreSQL
+    participant SE as ScoringEngine
 
-### 5.1 Unstructured to Structured
+    UI->>P: score_resumes_for_job(jd_id, weights, constraints)
+    P->>DB: read JD + resumes in pages
+    P->>SE: batch semantic similarity for page
+    loop each resume
+        P->>SE: score_resume(...)
+        SE-->>P: ResumeScoreResult
+    end
+    P->>DB: bulk insert resume_scores
+    P-->>UI: sorted results + timing
+```
 
-1. Extract text from resume/JD files.
-2. Run deterministic parser using section heuristics.
-3. Compute parser confidence.
-4. If confidence is low and LLM mode is enabled, run strict JSON fallback.
-5. Validate with Pydantic schemas.
-6. Store:
-   - raw extracted text
-   - parsed structured JSON
-   - diagnostics (mode, confidence, reasons, timing)
+## 7. Scoring and Explainability Details
 
-### 5.2 Core Structured Schema
+### 7.1 Dimension Computation
 
-- Candidate details and contact links
-- Skills, experience, education, projects, certifications
-- Parser diagnostics and score diagnostics
+- Exact Match:
+  - required skill matching when constraints include skills,
+  - otherwise overlap with JD term set.
+- Semantic Similarity:
+  - cosine-equivalent dot product on normalized embeddings,
+  - mapped to 0-100 scale via `(score + 1) * 50`.
+- Achievement:
+  - quantified metrics + achievement action terms from raw text.
+- Ownership:
+  - strong vs support verb signals by role,
+  - role-title weighting,
+  - recent-role emphasis (60/40 split).
 
-This enables reproducibility and explainability because each final score can be traced back to structured inputs.
+### 7.2 Strict Rejection Rules
 
-## 6. AI Strategy
+- Minimum years requirement enforced only when experience evidence is inferrable.
+- Degree keyword constraints with alias matching.
 
-### 6.1 Embeddings
+If any strict rule fails:
 
-- Model: `sentence-transformers/all-MiniLM-L6-v2`
-- Reason:
-  - Local and free
-  - Fast enough for recruiter workflows
-  - Good trade-off between quality and latency
+- `rejected = true`,
+- rejection reasons are recorded,
+- final score is capped at 40.
 
-### 6.2 LLM Strategy
+### 7.3 Recruiter Explanation Payload
 
-- Default mode: local-first (no paid dependency required)
-- Provider-flexible design: OpenAI and Anthropic supported via environment-configured fallback mode
-- LLM usage currently focused on parser fallback, not mandatory for core path
+Each score includes a compact JSON explanation containing:
 
-### 6.3 Semantic Similarity Methodology
+- candidate,
+- decision (`REVIEW` or `REJECT`),
+- skills_match note,
+- semantic_fit note,
+- experience signal,
+- risk flags,
+- recommendation.
 
-Approach: **embedding similarity + alias/concept mapping layer**.
+## 8. Reliability and Performance Design
 
-- Embedding similarity handles broad contextual match.
-- Alias map handles practical role-language equivalents.
+Implemented reliability mechanisms:
 
-Example mapping groups for role-fit scoring:
+- vector sync queue with retry attempts (`MAX_VECTOR_SYNC_ATTEMPTS=5`),
+- startup retry of pending vector jobs,
+- graceful parse continue when fallback fails,
+- timing metrics attached to parse and scoring outputs.
 
-- Streaming systems: Kafka, AWS Kinesis, RabbitMQ, Pulsar
-- Containers: Docker, containerization
-- Cloud providers: AWS, Azure, GCP
+Implemented performance mechanisms:
 
-This hybrid improves matching where direct keyword overlap is weak.
+- reusable embedding model instance,
+- embedding cache for repeated text encoding,
+- batch semantic scoring per page,
+- paginated resume fetch during scoring,
+- bulk DB writes for score rows,
+- incremental FAISS upserts by resume id.
 
-## 7. Scoring and Explainability
+## 9. Configuration Model
 
-### 7.1 Multi-Dimensional Scores
+Configuration is environment-driven (`src/config.py`):
 
-- **Exact Match**: required skill match and JD term overlap.
-- **Semantic Similarity**: embedding-based alignment between resume profile text and JD text.
-- **Achievement**: quantified impact and achievement language signals.
-- **Ownership**: leadership and ownership language by role context.
+- storage and embedding settings,
+- parser mode settings,
+- LLM provider credentials and endpoints.
 
-### 7.2 Strict Rejections
+`.env.example` documents practical mode presets:
 
-- Minimum years of experience
-- Required degree constraints
+- deterministic local mode,
+- OpenAI fallback mode,
+- Anthropic fallback mode,
+- forced LLM-only modes.
 
-If strict constraints fail, candidate is auto-flagged and explanation includes reasons.
+## 10. Validation and Benchmarking
 
-### 7.3 Explainability Output
+Included scripts provide repeatable quality/performance checks:
 
-For each candidate output:
+- `scripts/run_parser_qa.py`: parser QA on mildly unstructured samples.
+- `scripts/run_small_scoring_eval.py`: top-1/top-k/rejection correctness checks.
+- `scripts/run_small_scoring_stability.py`: randomized stability under weight/text perturbation.
+- `scripts/benchmark_option_a.py`: throughput and latency benchmarking.
+- `scripts/seed_benchmark_resumes.py`: synthetic large-set data seeding.
 
-1. Final score
-2. Dimension-wise score and note
-3. Short recruiter explanation
-4. Rejection trace (if any)
+## 11. Known Constraints
 
-## 8. Option B (Future) - Claim Verification Engine
+- `.doc` parsing depends on optional `textract` and system binaries.
+- Current deployment target is local/single-node workflow.
+- LLM fallback requires external credentials and network availability.
+- Vector index is local FAISS file-backed storage.
 
-### 8.1 Objective
+## 12. Extensibility Roadmap
 
-Check authenticity and activity signals from submitted public links.
+The current modular structure allows clean extension for:
 
-### 8.2 Planned Checks (Medium Depth)
+- Option B: claim verification service using public profile links.
+- Option C: tier assignment and interview-question generation layer.
 
-- URL validity and profile reachability
-- Basic profile consistency (name/username similarity)
-- Public activity freshness (recent commits/posts)
-- Repo signal quality (stars/forks/commit continuity)
-- Suspicious patterns (new account, no activity, mismatch)
-
-### 8.3 Output
-
-- Verification score (0-100)
-- Risk flags list
-- Human-readable summary for recruiters
-
-## 9. Option C (Future) - Tiering + Question Generator
-
-### 9.1 Tiering
-
-Tier policy:
-
-- Tier A: fast-track interview
-- Tier B: technical screen
-- Tier C: manual review or additional assessment
-
-Input features:
-
-- Total score
-- Dimension distribution
-- Rejection status
-- Optional verification score (from Option B)
-
-### 9.2 Hybrid Question Generation
-
-Method: **rule-seeded + LLM refinement**.
-
-1. Seed question topics from skills, projects, and weak dimensions.
-2. Apply difficulty ladder (easy -> medium -> deep-dive).
-3. Use LLM to generate role-specific questions in strict JSON schema.
-4. Fallback to templates if LLM unavailable.
-
-Output per candidate:
-
-- 6-10 technical questions
-- expected-signal rubric
-- follow-up question tree
-
-## 10. Scalability Plan (10,000+ resumes/day)
-
-Design target is a multi-worker pipeline while preserving local-first dev simplicity.
-
-### 10.1 Processing Model
-
-- API/UI layer is stateless.
-- Background queue for ingestion and scoring tasks.
-- Worker pools split by stage:
-  - parsing workers
-  - embedding workers
-  - scoring workers
-
-### 10.2 Throughput Strategy
-
-- Batch embedding calls.
-- Reuse cached vectors for repeated JD scoring sessions.
-- Idempotent job keys to avoid duplicate processing.
-- Retry queue with capped attempts and dead-letter handling.
-
-### 10.3 Data and Index Strategy
-
-- PostgreSQL partitioning/indexing for high-volume score history.
-- FAISS maintained as local vector index for current architecture.
-- Periodic compaction/reindex jobs during low-traffic windows.
-
-### 10.4 Reliability and Observability
-
-- Per-stage latency metrics (parse, vector, score, db write).
-- Success/failure counters and retry reasons.
-- Health checks for DB, model load, and queue lag.
-
-### 10.5 Capacity View (Illustrative)
-
-- 10,000 resumes/day is about 417 resumes/hour at steady load.
-- With horizontal workers and batching, this is feasible on modest infra.
-- Burst handling comes from queue buffering and worker autoscaling.
-
-### 10.6 Measured Benchmark Evidence (Current Build)
-
-The following measurements were captured from local benchmark runs using synthetic data.
-
-Test setup:
-
-- JD sample size: 5000 resumes attached to one job description
-- Benchmark command shape: `--warmups 0 --runs 3 --max-resumes 300`
-- Embedding model: `sentence-transformers/all-MiniLM-L6-v2`
-
-Run A (compute-only, no score persistence):
-
-- `persist_scores=false`
-- `avg_run_seconds=2.35`
-- `throughput_rows_per_second=127.68`
-- `projected_rows_per_day=11,031,865`
-- `meets_target=true`
-
-Run B (includes DB score writes):
-
-- `persist_scores=true`
-- `avg_run_seconds=2.042`
-- `throughput_rows_per_second=146.9`
-- `projected_rows_per_day=12,692,106`
-- `meets_target=true`
-- sample timing shows DB write cost captured (`db_write_total=25.65ms` in sampled run)
-
-Interpretation:
-
-- The implemented Option A scoring pipeline exceeds the 10,000 resumes/day target on tested hardware.
-- First run is slower due to model warm-up; subsequent warm runs are significantly faster.
-- For production planning, use p95 and p99 metrics and include larger repeated runs during capacity validation.
-
-## 11. Security and Privacy
-
-- Local-first default to reduce data egress.
-- Environment-based configuration for secrets.
-- Store only required candidate data and audit score changes.
-- Avoid logging sensitive personal text in debug logs.
-
-## 12. Trade-offs and Risks
-
-- Local models are cheaper but can be less accurate than large hosted models.
-- Heuristic parsing is fast but may miss unusual resume layouts.
-- FAISS local index is simple, but needs disciplined maintenance for scale.
-
-Mitigation:
-
-- Confidence-gated fallback parser
-- explicit scoring explanations
-- modular architecture for future provider and storage upgrades
-
-## 13. Implementation Status Snapshot
-
-- Implemented deeply: Option A (Scoring Engine and scoring flow)
-- Designed for next phase: Option B and Option C
-
-This matches the assignment instruction to prioritize depth over breadth while still documenting complete architecture.
+These can be added as additional pipeline stages without changing core parsing and scoring contracts.

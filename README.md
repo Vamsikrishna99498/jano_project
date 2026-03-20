@@ -1,339 +1,204 @@
-# AI Resume Shortlisting - Phase 1 + Phase 2
+# AI Resume Assistant
 
-Phase 1 implements a local-first smart parser pipeline for resumes.
-Phase 2 adds a multi-dimensional scoring engine with recruiter-configurable weights.
+Local-first resume parsing and scoring system built with Streamlit, PostgreSQL, and FAISS.
 
-## Assignment Deliverables Mapping
+Implemented focus is Option A: parser + explainable scoring engine.
 
-- System Design Document: see `SYSTEM_DESIGN.md`
-- Implementation: Option A (Evaluation and Scoring Engine) implemented in this repository
-- README: this file includes setup, architecture summary, and execution flow
+## What This Project Does
 
-Current scope statement:
+- Ingest resumes in `.pdf`, `.docx`, and `.doc` formats.
+- Ingest job descriptions as text or uploaded `.pdf`/`.docx`/`.doc`/`.txt`.
+- Parse resumes with a deterministic code-first parser.
+- Optionally use LLM fallback (OpenAI or Anthropic) when parse quality is low.
+- Persist parsed data and scoring outputs in PostgreSQL.
+- Store local vector index in FAISS for semantic workflows.
+- Rank candidates with weighted multi-dimensional scoring.
+- Generate recruiter-facing explainability output for each score.
 
-- Deep implementation focus is Option A.
-- Option B (Claim Verification) and Option C (Tiering + Question Generator) are included as future-ready architecture plans in `SYSTEM_DESIGN.md`.
+## Tech Stack
 
-## What is included
+- UI: Streamlit
+- Parsing: pdfplumber, python-docx, optional textract for `.doc`
+- Data validation: Pydantic v2
+- Storage: PostgreSQL (SQLAlchemy)
+- Vector index: FAISS (local file index)
+- Embeddings: sentence-transformers (`all-MiniLM-L6-v2` by default)
+- Optional LLM fallback: OpenAI SDK and Anthropic HTTP API
 
-- PDF and Word resume ingestion (`.pdf`, `.docx`, `.doc`)
-- Separate Job Description input and storage
-- Dedicated Job Description parser (text/PDF/Word/TXT) for auto extraction
-- Code-first parsing with deterministic section extraction
-- LLM fallback for messy layouts (optional)
-- PostgreSQL persistence for parsed outputs
-- FAISS vector indexing for resume chunks/embeddings
-- Streamlit UI for local operation
-- Multi-dimensional scoring engine (Exact Match, Semantic Similarity, Achievement, Ownership)
-- Strict rejection rules (minimum years and degree constraints)
-- Recruiter-facing short explanation for each scored resume
+## Repository Layout
 
-## Local Architecture
+- `app.py`: Streamlit app
+- `src/pipeline.py`: orchestration of parse, persistence, vector sync, and scoring
+- `src/parser/`: extractors, heuristic parser, JD parser, LLM fallback
+- `src/scoring/engine.py`: score computation + explainability
+- `src/storage/`: PostgreSQL store and FAISS vector store
+- `scripts/`: benchmarks and validation scripts
+- `data/testsets/`: synthetic QA/eval datasets and sample reports
 
-1. User uploads resumes and enters a Job Description in Streamlit.
-2. Parser runs deterministic extraction first.
-3. Quality gates evaluate parser confidence.
-4. If enabled and quality is low, LLM fallback attempts strict JSON extraction.
-5. Structured record is stored in PostgreSQL.
-6. Resume text embedding is stored in a local FAISS index.
-7. Recruiter selects per-role weights and strict constraints, then runs Phase 2 scoring.
+## Quick Start
 
-## Phase 2 Scoring
-
-Dimensions:
-
-- Exact Match: required skill matching and JD skill-term overlap.
-- Semantic Similarity: local embedding similarity between resume profile text and JD text.
-- Achievement: quantified outcomes and achievement language signals.
-- Ownership: lead/ownership language strength.
-
-Strict rejection rules:
-
-- Minimum years of experience.
-- Required degree keywords.
-
-Constraint source:
-
-- Constraints are auto-extracted from the selected Job Description using the JD parser.
-- Manual skill/year/degree entry is not required in scoring flow.
-
-Scoring target:
-
-- Designed for local execution with practical latency target under 3 seconds per resume on typical developer hardware.
-
-Scale upgrades implemented for Option A:
-
-- Incremental FAISS upserts by resume id (no full index rebuild per new resume).
-- Chunked scoring pipeline for large JD-attached resume sets.
-- Bulk score writes to PostgreSQL to reduce per-row DB overhead.
-- Queue-friendly vector sync retry path retained for resilient ingestion.
-
-## Why This Transformer
-
-Embedding model: `sentence-transformers/all-MiniLM-L6-v2`
-
-Why chosen in this project:
-
-- Local and free to run, matching your no-paid-services requirement.
-- Fast inference suitable for recruiter workflows and sub-3s scoring targets.
-- Strong enough semantic quality for JD-resume alignment without heavier infrastructure.
-- Reused across FAISS indexing and semantic scoring to keep behavior consistent.
-
-When to upgrade in future:
-
-- If you need higher semantic precision for niche roles, a stronger local model can be added as an optional profile.
-
-## Chunking Strategy (Future)
-
-- Current implementation does not apply chunking in Phase 2 scoring.
-- As requested, no chunking strategy will be implemented until you provide your preferred strategy.
-- Before any chunking changes, you will be asked to approve exact rules (chunk size, overlap, section-aware behavior, and weighting).
-
-## Setup
-
-1. Install dependencies:
-
-```bash
-./.venv/bin/python -m pip install -r requirements.txt
-```
-
-2. Configure environment:
-
-```bash
-cp .env.example .env
-```
-
-3. Ensure PostgreSQL is running and update `DATABASE_URL`.
-
-4. Run Streamlit:
-
-```bash
-streamlit run app.py
-```
-
-## Quick Start (Recruiter/Tester)
-
-Use this if you want to validate the app quickly on a local machine:
-
-One-command bootstrap:
+1. Bootstrap locally:
 
 ```bash
 ./setup_local.sh
 ```
 
-Then run:
+2. Create/update env:
+
+```bash
+cp .env.example .env
+```
+
+3. Set DB connection in `.env`:
+
+```env
+DATABASE_URL=postgresql+psycopg2://postgres:YOUR_DB_PASSWORD@localhost:5432/resume_ai
+```
+
+4. Run app:
 
 ```bash
 source .venv/bin/activate
 python -m streamlit run app.py
 ```
 
-Manual steps (alternative):
+## Runtime Flow
 
-1. Copy env template:
+1. Add a job description.
+2. Upload resumes and parse.
+3. Parsed result is stored in `resumes`, and a vector sync job is queued.
+4. Pipeline attempts immediate FAISS upsert; failed upserts stay queued for retry.
+5. Run scoring for selected JD with recruiter-configurable weights.
+6. Score rows are persisted in `resume_scores` with dimensions and explanation.
 
-```bash
-cp .env.example .env
-```
+## Parser Modes
 
-2. Set your database password inside `.env`:
+Parser controls are configured in `.env`.
 
-```env
-DATABASE_URL=postgresql+psycopg2://postgres:YOUR_DB_PASSWORD@localhost:5432/resume_ai
-```
+- `LLM_MODE=none` and `FORCE_LLM_ONLY=false`:
+  - Pure code-first parser (recommended default local mode).
+- `LLM_MODE=openai` and `FORCE_LLM_ONLY=false`:
+  - Code-first parser, OpenAI fallback only when needed.
+- `LLM_MODE=anthropic` and `FORCE_LLM_ONLY=false`:
+  - Code-first parser, Anthropic fallback only when needed.
+- `FORCE_LLM_ONLY=true`:
+  - Skip code parser and use configured LLM path directly.
 
-3. Start app:
+The parser fallback decision is based on confidence and sparse-content signals.
 
-```bash
-python -m streamlit run app.py
-```
+## Scoring Model
 
-4. Open browser URL shown by Streamlit, add one Job Description, then upload resumes.
+Dimensions:
 
-Security note:
+- Exact Match
+- Semantic Similarity
+- Achievement
+- Ownership
 
-- `.env` is local-only and is intentionally not committed.
-- `.env.example` is the safe template committed to GitHub.
+Final score is weighted using normalized recruiter-configured weights. Strict-rule failures mark candidates as rejected and cap final score at 40.
 
-## Troubleshooting
+Strict rules:
 
-- If you see database auth errors, reset postgres password and update `.env` to match.
-- If app still shows old DB settings, stop Streamlit and restart it.
+- minimum years of experience (when inferrable)
+- required degree keywords
 
-## Throughput Benchmark (Option A)
+Constraints are auto-derived from JD text by the JD parser.
 
-Use this script to estimate scoring throughput and validate readiness for 10,000+ resumes/day:
+## Explainability Output
+
+Each scored row includes:
+
+- per-dimension score + note
+- strict-rule rejection reasons
+- recruiter explanation payload (`recruiter_explanation`) stored as JSON string
+
+UI displays this explanation directly in scoring results.
+
+## Environment Variables
+
+See `.env.example` for all options and use-case presets.
+
+Core variables:
+
+- `DATABASE_URL`
+- `VECTOR_INDEX_PATH`
+- `VECTOR_META_PATH`
+- `EMBEDDING_MODEL`
+- `LLM_MODE`
+- `LLM_MODEL`
+- `FORCE_LLM_ONLY`
+
+Provider variables (optional):
+
+- OpenAI: `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_PROJECT`, `OPENAI_ORGANIZATION`
+- Anthropic: `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_VERSION`
+
+## Benchmark and Validation Scripts
+
+List JDs:
 
 ```bash
 python scripts/benchmark_option_a.py --list-jds
+```
+
+Run throughput benchmark:
+
+```bash
 python scripts/benchmark_option_a.py --jd-id 1 --warmups 2 --runs 20
 ```
 
-Optional: include DB score write overhead in benchmark numbers:
+Include DB write cost during benchmark:
 
 ```bash
 python scripts/benchmark_option_a.py --jd-id 1 --warmups 2 --runs 20 --persist-scores
 ```
 
-If your machine is slower, run a fast sample benchmark first:
-
-```bash
-python scripts/benchmark_option_a.py --jd-id 1 --warmups 0 --runs 3 --max-resumes 300
-```
-
-If your JD has too few resumes, seed synthetic benchmark data first:
+Seed synthetic resumes for benchmarking:
 
 ```bash
 python scripts/seed_benchmark_resumes.py --jd-id 1 --count 5000 --batch-size 500
 ```
 
-Notes:
-
-- Default benchmark mode computes scoring without writing score rows to DB.
-- Benchmark output includes p50/p95/p99 runtime and projected rows/day.
-- For credible capacity claims, benchmark with at least 1000+ resumes per JD.
-
-Latest measured evidence (local run):
-
-- Dataset: 5000 resumes linked to one JD.
-- Compute-only benchmark (`persist_scores=false`, `max_resumes=300`):
-	- `throughput_rows_per_second=127.68`
-	- `projected_rows_per_day=11,031,865`
-	- `meets_target=true`
-- DB-inclusive benchmark (`persist_scores=true`, `max_resumes=300`):
-	- `throughput_rows_per_second=146.9`
-	- `projected_rows_per_day=12,692,106`
-	- `meets_target=true`
-
-Practical reading:
-
-- The first run is usually slower due to model warm-up.
-- Warm runs better represent steady-state throughput.
-
-## Small Synthetic Testset (Option A)
-
-Inspired by JD-plus-ground-truth style evaluation from resume screening RAG projects,
-this repo includes a small synthetic scoring testset for quick local validation.
-
-Included assets:
-
-- Testset: `data/testsets/scoring_small_testset.json`
-- Evaluator script: `scripts/run_small_scoring_eval.py`
-
-Run evaluation:
+Run small scoring eval:
 
 ```bash
 python scripts/run_small_scoring_eval.py
 ```
 
-Run with stricter checks and parser-layer e2e validation:
+Run eval with parser-layer e2e mode:
 
 ```bash
 python scripts/run_small_scoring_eval.py --e2e-parse
 ```
 
-Custom paths:
-
-```bash
-python scripts/run_small_scoring_eval.py \
-	--testset data/testsets/scoring_small_testset.json \
-	--output data/testsets/results/scoring_small_eval_report.json
-```
-
-What is validated:
-
-- Top-1 expected candidate per JD test case
-- Top-K expected candidate set inclusion
-- Strict rejection behavior for configured constraints
-- Strict Top-K order check (when expected order is provided)
-- False-positive rejection check via `must_not_reject_ids`
-- Optional parser-layer e2e top-1 check (`--e2e-parse`)
-
-## Stability Check (Randomized, Small Scale)
-
-You can also run repeated randomized checks to see if ranking decisions stay stable
-when scoring weights are slightly perturbed.
-
-Script:
-
-- `scripts/run_small_scoring_stability.py`
-
-Example run:
+Run scoring stability checks:
 
 ```bash
 python scripts/run_small_scoring_stability.py --iterations 20 --weight-jitter 0.15
 ```
 
-Stricter mode (weight jitter + candidate text perturbation):
-
-```bash
-python scripts/run_small_scoring_stability.py \
-	--iterations 20 \
-	--weight-jitter 0.15 \
-	--perturb-text \
-	--text-jitter 0.20
-```
-
-Output report:
-
-- `data/testsets/results/scoring_small_stability_report.json`
-
-Key outputs:
-
-- top1_stability per case
-- topk_stability per case
-- reject_stability per case
-- average stability metrics across all cases
-
-## Parser QA (Mildly Unstructured Samples)
-
-To prevent regressions in parser behavior for slightly messy resume text,
-run parser QA fixtures:
-
-- Input fixtures: `data/testsets/parser_qa_samples.json`
-- Runner: `scripts/run_parser_qa.py`
-
-Command:
+Run parser QA fixtures:
 
 ```bash
 python scripts/run_parser_qa.py
 ```
 
-Report output:
+## Database Reset (Local)
 
-- `data/testsets/results/parser_qa_report.json`
-
-Checks include:
-
-- required skill extraction
-- minimum experience entries
-- contact email capture
-- summary capture
-
-## LLM Fallback Modes
-
-- `none`: no fallback.
-- `openai`: hosted OpenAI models (set `OPENAI_API_KEY`).
-- `anthropic`: hosted Anthropic models (set `ANTHROPIC_API_KEY`).
-
-Set using env vars in `.env`.
-
-Example:
+Reset all project tables by recreating `public` schema:
 
 ```bash
-# OpenAI
-LLM_MODE=openai
-LLM_MODEL=gpt-4o-mini
-OPENAI_API_KEY=your_key_here
-
-# Anthropic
-LLM_MODE=anthropic
-LLM_MODEL=claude-3-5-haiku-latest
-ANTHROPIC_API_KEY=your_key_here
+set -e
+DATABASE_URL=$(grep -E '^DATABASE_URL=' .env | head -n1 | cut -d'=' -f2-)
+PSQL_URL="${DATABASE_URL/+psycopg2/}"
+psql -w "$PSQL_URL" -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 ```
 
-## Notes
+Start the app again to recreate tables.
 
-- `.doc` support is best-effort and requires optional `textract` system dependencies.
-- Default embedding model is `all-MiniLM-L6-v2`.
-- File size enforcement is done in app: ideal `<1MB`, hard limit `2MB`.
+## Notes and Limitations
+
+- `.doc` parsing requires optional `textract` plus system-level dependencies.
+- FAISS index and metadata are stored as local files under `data/` by default.
+- LLM fallback is optional; full workflow runs without paid APIs in code-first mode.
+- `.env` is local-only and should not be committed.
