@@ -92,6 +92,21 @@ streamlit run app.py
 
 Use this if you want to validate the app quickly on a local machine:
 
+One-command bootstrap:
+
+```bash
+./setup_local.sh
+```
+
+Then run:
+
+```bash
+source .venv/bin/activate
+python -m streamlit run app.py
+```
+
+Manual steps (alternative):
+
 1. Copy env template:
 
 ```bash
