@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from src.config import settings
+from src.embeddings.service import EmbeddingService
 from src.parser.smart_parser import SmartParser
 from src.scoring.engine import ResumeScoringEngine
 from src.schemas import ParseResult, ParsedResume, ResumeScoreResult, ScoringConstraints, ScoringWeights
@@ -14,12 +15,13 @@ class ResumeIngestionPipeline:
     def __init__(self) -> None:
         self.parser = SmartParser(min_confidence_for_code_first=0.65)
         self.pg = PostgresStore(settings.database_url)
+        self.embedder = EmbeddingService(settings.embedding_model)
         self.faiss = FaissVectorStore(
             index_path=settings.vector_index_path,
             meta_path=settings.vector_meta_path,
-            embedding_model=settings.embedding_model,
+            embedder=self.embedder,
         )
-        self.scoring = ResumeScoringEngine(settings.embedding_model)
+        self.scoring = ResumeScoringEngine(embedder=self.embedder)
         self.scoring_version = "phase2.v2"
         self.pg.init_db()
 

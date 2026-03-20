@@ -4,8 +4,8 @@ import re
 from datetime import datetime
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
+from src.embeddings.service import EmbeddingService
 from src.schemas import (
     DimensionScore,
     ParsedResume,
@@ -16,8 +16,14 @@ from src.schemas import (
 
 
 class ResumeScoringEngine:
-    def __init__(self, embedding_model: str) -> None:
-        self.model = SentenceTransformer(embedding_model)
+    def __init__(
+        self,
+        embedding_model: str | None = None,
+        embedder: EmbeddingService | None = None,
+    ) -> None:
+        if embedder is None and not embedding_model:
+            raise ValueError("Either embedder or embedding_model must be provided.")
+        self.embedder = embedder or EmbeddingService(str(embedding_model))
 
     def score_resume(
         self,
@@ -91,7 +97,7 @@ class ResumeScoringEngine:
         if not resume_text.strip() or not jd_text.strip():
             return 0.0, "Insufficient text for semantic comparison."
 
-        vectors = self.model.encode([resume_text, jd_text], normalize_embeddings=True)
+        vectors = self.embedder.encode_texts([resume_text, jd_text], normalize_embeddings=True)
         score = float(np.dot(vectors[0], vectors[1]))
         mapped = max(0.0, min(100.0, (score + 1.0) * 50.0))
         return mapped, f"Semantic alignment score {mapped:.1f}/100 using local embeddings."
