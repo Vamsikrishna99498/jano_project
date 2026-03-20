@@ -88,6 +88,40 @@ cp .env.example .env
 streamlit run app.py
 ```
 
+## Quick Start (Recruiter/Tester)
+
+Use this if you want to validate the app quickly on a local machine:
+
+1. Copy env template:
+
+```bash
+cp .env.example .env
+```
+
+2. Set your database password inside `.env`:
+
+```env
+DATABASE_URL=postgresql+psycopg2://postgres:YOUR_DB_PASSWORD@localhost:5432/resume_ai
+```
+
+3. Start app:
+
+```bash
+python -m streamlit run app.py
+```
+
+4. Open browser URL shown by Streamlit, add one Job Description, then upload resumes.
+
+Security note:
+
+- `.env` is local-only and is intentionally not committed.
+- `.env.example` is the safe template committed to GitHub.
+
+## Troubleshooting
+
+- If you see database auth errors, reset postgres password and update `.env` to match.
+- If app still shows old DB settings, stop Streamlit and restart it.
+
 ## LLM Fallback Modes
 
 - `none`: no fallback.
