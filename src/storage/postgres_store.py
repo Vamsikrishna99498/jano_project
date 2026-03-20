@@ -60,6 +60,15 @@ class PostgresStore:
             rows = conn.execute(job_descriptions.select().order_by(job_descriptions.c.id.desc()))
             return [dict(row._mapping) for row in rows]
 
+    def get_job_description(self, jd_id: int) -> dict | None:
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                job_descriptions.select().where(job_descriptions.c.id == jd_id)
+            ).fetchone()
+            if row is None:
+                return None
+            return dict(row._mapping)
+
     def add_resume(self, parse_result: ParseResult, job_description_id: Optional[int]) -> int:
         with self.engine.begin() as conn:
             result = conn.execute(
@@ -76,3 +85,11 @@ class PostgresStore:
                 )
             )
             return int(result.inserted_primary_key[0])
+
+    def list_resumes(self, job_description_id: Optional[int] = None) -> list[dict]:
+        query = resumes.select().order_by(resumes.c.id.desc())
+        if job_description_id is not None:
+            query = query.where(resumes.c.job_description_id == job_description_id)
+        with self.engine.begin() as conn:
+            rows = conn.execute(query)
+            return [dict(row._mapping) for row in rows]

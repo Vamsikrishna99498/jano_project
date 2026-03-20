@@ -61,3 +61,34 @@ class ParseResult(BaseModel):
     resume: ParsedResume
     diagnostics: ParseDiagnostics
     raw_text: str
+
+
+class ScoringWeights(BaseModel):
+    exact_match: float = 35.0
+    semantic_similarity: float = 30.0
+    impact: float = 20.0
+    ownership: float = 15.0
+
+
+class ScoringConstraints(BaseModel):
+    min_years_experience: float = 0.0
+    required_degree_keywords: List[str] = Field(default_factory=list)
+    required_certifications: List[str] = Field(default_factory=list)
+    required_skills: List[str] = Field(default_factory=list)
+
+
+class DimensionScore(BaseModel):
+    name: str
+    score: float
+    note: str
+
+
+class ResumeScoreResult(BaseModel):
+    resume_id: int
+    file_name: str
+    candidate_name: Optional[str] = None
+    total_score: float
+    rejected: bool = False
+    rejection_reasons: List[str] = Field(default_factory=list)
+    dimension_scores: List[DimensionScore] = Field(default_factory=list)
+    recruiter_explanation: str = ""

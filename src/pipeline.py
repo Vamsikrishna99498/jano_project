@@ -4,7 +4,8 @@ from typing import Optional
 
 from src.config import settings
 from src.parser.smart_parser import SmartParser
-from src.schemas import ParseResult
+from src.scoring.engine import ResumeScoringEngine
+from src.schemas import ParseResult, ParsedResume, ResumeScoreResult, ScoringConstraints, ScoringWeights
 from src.storage.postgres_store import PostgresStore
 from src.storage.vector_store import FaissVectorStore
 
@@ -18,6 +19,7 @@ class ResumeIngestionPipeline:
             meta_path=settings.vector_meta_path,
             embedding_model=settings.embedding_model,
         )
+        self.scoring = ResumeScoringEngine(settings.embedding_model)
         self.pg.init_db()
 
     def create_job_description(self, title: str, description: str) -> int:
@@ -36,3 +38,31 @@ class ResumeIngestionPipeline:
         resume_id = self.pg.add_resume(parse_result=parse_result, job_description_id=job_description_id)
         self.faiss.add_resume_text(resume_id=resume_id, text=parse_result.raw_text)
         return resume_id, parse_result
+
+    def score_resumes_for_job(
+        self,
+        job_description_id: int,
+        weights: ScoringWeights,
+        constraints: ScoringConstraints,
+    ) -> list[ResumeScoreResult]:
+        jd = self.pg.get_job_description(job_description_id)
+        if jd is None:
+            raise ValueError(f"Job description id={job_description_id} not found.")
+
+        rows = self.pg.list_resumes(job_description_id=job_description_id)
+        results: list[ResumeScoreResult] = []
+        for row in rows:
+            parsed = ParsedResume.model_validate(row["parsed_json"])
+            result = self.scoring.score_resume(
+                resume_id=int(row["id"]),
+                file_name=str(row["file_name"]),
+                resume=parsed,
+                raw_text=str(row["raw_text"]),
+                jd_text=str(jd["description"]),
+                weights=weights,
+                constraints=constraints,
+            )
+            results.append(result)
+
+        results.sort(key=lambda x: x.total_score, reverse=True)
+        return results
