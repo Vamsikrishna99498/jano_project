@@ -191,6 +191,17 @@ Run parser QA fixtures:
 python scripts/run_parser_qa.py
 ```
 
+Run all scripts at once (recommended order):
+
+```bash
+set -e && \
+python scripts/seed_benchmark_resumes.py --jd-id 1 --count 1000 --batch-size 500 && \
+python scripts/benchmark_option_a.py --jd-id 1 --runs 5 --warmups 1 && \
+python scripts/run_parser_qa.py && \
+python scripts/run_small_scoring_eval.py --e2e-parse && \
+python scripts/run_small_scoring_stability.py --perturb-text --iterations 20
+```
+
 ## Validation Notes
 
 Detailed validation rationale and latest run outcomes are documented in `SYSTEM_DESIGN.md` under the validation section.
