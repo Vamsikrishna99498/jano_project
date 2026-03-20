@@ -4,6 +4,14 @@ Local-first resume parsing and scoring system built with Streamlit, PostgreSQL, 
 
 Implemented focus is Option A: parser + explainable scoring engine.
 
+## Introduction
+
+AI Resume Assistant helps recruiters and hiring teams quickly evaluate resumes against a job description.
+
+It takes uploaded resumes, converts them into structured candidate profiles, and scores each candidate across four dimensions: Exact Match, Semantic Similarity, Achievement, and Ownership. The system also applies strict rejection checks (experience and degree constraints) and produces recruiter-friendly explainability output for every score.
+
+The project is designed to run locally with low infrastructure complexity. You can use deterministic code-first parsing by default, and optionally enable LLM fallback only for difficult resume layouts.
+
 ## What This Project Does
 
 - Ingest resumes in `.pdf`, `.docx`, and `.doc` formats.
