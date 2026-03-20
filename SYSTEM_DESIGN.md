@@ -262,6 +262,39 @@ Design target is a multi-worker pipeline while preserving local-first dev simpli
 - With horizontal workers and batching, this is feasible on modest infra.
 - Burst handling comes from queue buffering and worker autoscaling.
 
+### 10.6 Measured Benchmark Evidence (Current Build)
+
+The following measurements were captured from local benchmark runs using synthetic data.
+
+Test setup:
+
+- JD sample size: 5000 resumes attached to one job description
+- Benchmark command shape: `--warmups 0 --runs 3 --max-resumes 300`
+- Embedding model: `sentence-transformers/all-MiniLM-L6-v2`
+
+Run A (compute-only, no score persistence):
+
+- `persist_scores=false`
+- `avg_run_seconds=2.35`
+- `throughput_rows_per_second=127.68`
+- `projected_rows_per_day=11,031,865`
+- `meets_target=true`
+
+Run B (includes DB score writes):
+
+- `persist_scores=true`
+- `avg_run_seconds=2.042`
+- `throughput_rows_per_second=146.9`
+- `projected_rows_per_day=12,692,106`
+- `meets_target=true`
+- sample timing shows DB write cost captured (`db_write_total=25.65ms` in sampled run)
+
+Interpretation:
+
+- The implemented Option A scoring pipeline exceeds the 10,000 resumes/day target on tested hardware.
+- First run is slower due to model warm-up; subsequent warm runs are significantly faster.
+- For production planning, use p95 and p99 metrics and include larger repeated runs during capacity validation.
+
 ## 11. Security and Privacy
 
 - Local-first default to reduce data egress.

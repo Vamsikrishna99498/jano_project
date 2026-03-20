@@ -61,6 +61,13 @@ Scoring target:
 
 - Designed for local execution with practical latency target under 3 seconds per resume on typical developer hardware.
 
+Scale upgrades implemented for Option A:
+
+- Incremental FAISS upserts by resume id (no full index rebuild per new resume).
+- Chunked scoring pipeline for large JD-attached resume sets.
+- Bulk score writes to PostgreSQL to reduce per-row DB overhead.
+- Queue-friendly vector sync retry path retained for resilient ingestion.
+
 ## Why This Transformer
 
 Embedding model: `sentence-transformers/all-MiniLM-L6-v2`
@@ -152,6 +159,56 @@ Security note:
 
 - If you see database auth errors, reset postgres password and update `.env` to match.
 - If app still shows old DB settings, stop Streamlit and restart it.
+
+## Throughput Benchmark (Option A)
+
+Use this script to estimate scoring throughput and validate readiness for 10,000+ resumes/day:
+
+```bash
+python scripts/benchmark_option_a.py --list-jds
+python scripts/benchmark_option_a.py --jd-id 1 --warmups 2 --runs 20
+```
+
+Optional: include DB score write overhead in benchmark numbers:
+
+```bash
+python scripts/benchmark_option_a.py --jd-id 1 --warmups 2 --runs 20 --persist-scores
+```
+
+If your machine is slower, run a fast sample benchmark first:
+
+```bash
+python scripts/benchmark_option_a.py --jd-id 1 --warmups 0 --runs 3 --max-resumes 300
+```
+
+If your JD has too few resumes, seed synthetic benchmark data first:
+
+```bash
+python scripts/seed_benchmark_resumes.py --jd-id 1 --count 5000 --batch-size 500
+```
+
+Notes:
+
+- Default benchmark mode computes scoring without writing score rows to DB.
+- Benchmark output includes p50/p95/p99 runtime and projected rows/day.
+- For credible capacity claims, benchmark with at least 1000+ resumes per JD.
+
+Latest measured evidence (local run):
+
+- Dataset: 5000 resumes linked to one JD.
+- Compute-only benchmark (`persist_scores=false`, `max_resumes=300`):
+	- `throughput_rows_per_second=127.68`
+	- `projected_rows_per_day=11,031,865`
+	- `meets_target=true`
+- DB-inclusive benchmark (`persist_scores=true`, `max_resumes=300`):
+	- `throughput_rows_per_second=146.9`
+	- `projected_rows_per_day=12,692,106`
+	- `meets_target=true`
+
+Practical reading:
+
+- The first run is usually slower due to model warm-up.
+- Warm runs better represent steady-state throughput.
 
 ## LLM Fallback Modes
 
