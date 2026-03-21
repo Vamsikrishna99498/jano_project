@@ -4,6 +4,10 @@ Local-first resume parsing and scoring system built with Streamlit, PostgreSQL, 
 
 Implemented focus is Option A: parser + explainable scoring engine.
 
+## Demo Video
+
+Watch the product walkthrough here: [demo.mp4](demo.mp4)
+
 ## Introduction
 
 AI Resume Assistant helps recruiters and hiring teams quickly evaluate resumes against a job description.
