@@ -6,7 +6,13 @@ Implemented focus is Option A: parser + explainable scoring engine.
 
 ## Demo Video
 
-Watch the product walkthrough here: [Play Demo Video](./demo.mp4?raw=1)
+Watch the product walkthrough below.
+
+<video controls width="900" src="https://raw.githubusercontent.com/Vamsikrishna99498/jano_project/main/demo.mp4">
+  Your browser does not support embedded videos.
+</video>
+
+Direct link: [Open demo.mp4](https://raw.githubusercontent.com/Vamsikrishna99498/jano_project/main/demo.mp4)
 
 ## Introduction
 
