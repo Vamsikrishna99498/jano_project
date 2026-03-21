@@ -8,7 +8,15 @@ Implemented focus is Option A: parser + explainable scoring engine.
 
 Watch the product walkthrough below.
 
-Direct link: https://github.com/user-attachments/assets/25c44cd5-7a73-47fd-869a-812f30bd9132
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/25c44cd5-7a73-47fd-869a-812f30bd9132">
+    <img alt="Watch Demo Video" src="https://img.shields.io/badge/Watch-Demo%20Video-2ea44f?style=for-the-badge&logo=github" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/25c44cd5-7a73-47fd-869a-812f30bd9132">Open video on GitHub</a>
+</p>
 
 ## Introduction
 
