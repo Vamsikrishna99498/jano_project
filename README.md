@@ -6,7 +6,7 @@ Implemented focus is Option A: parser + explainable scoring engine.
 
 ## Demo Video
 
-Watch the product walkthrough here: [demo.mp4](demo.mp4)
+Watch the product walkthrough here: [Play Demo Video](./demo.mp4?raw=1)
 
 ## Introduction
 
