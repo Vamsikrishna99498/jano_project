@@ -8,11 +8,7 @@ Implemented focus is Option A: parser + explainable scoring engine.
 
 Watch the product walkthrough below.
 
-<video controls width="900" src="https://raw.githubusercontent.com/Vamsikrishna99498/jano_project/main/demo.mp4">
-  Your browser does not support embedded videos.
-</video>
-
-Direct link: [Open demo.mp4](https://raw.githubusercontent.com/Vamsikrishna99498/jano_project/main/demo.mp4)
+Direct link: [G1 A7 Q_12 Sqn_5.mp3](https://github.com/user-attachments/files/26159826/G1.A7.Q_12.Sqn_5.mp3)
 
 ## Introduction
 
