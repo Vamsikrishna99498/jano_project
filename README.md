@@ -8,7 +8,7 @@ Implemented focus is Option A: parser + explainable scoring engine.
 
 Watch the product walkthrough below.
 
-Direct link: [G1 A7 Q_12 Sqn_5.mp3](https://github.com/user-attachments/files/26159826/G1.A7.Q_12.Sqn_5.mp3)
+Direct link: https://github.com/user-attachments/assets/25c44cd5-7a73-47fd-869a-812f30bd9132
 
 ## Introduction
 
